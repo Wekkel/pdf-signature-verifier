@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("PdfSignatureVerifier.App")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+57891148531813880f69ec07c2fee8cb71f8d6c7")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+12051c0895fa111f3e007c4f9bdd33234746bd5c")]
 [assembly: System.Reflection.AssemblyProductAttribute("PdfSignatureVerifier.App")]
 [assembly: System.Reflection.AssemblyTitleAttribute("PdfSignatureVerifier.App")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

@@ -3,6 +3,8 @@ using System;
 using System.IO;
 using System.Windows;
 using System.Windows.Media;
+using System.Collections.Generic;
+using Org.BouncyCastle.X509;
 
 // iText & BouncyCastle using statements
 using iText.Kernel.Pdf;
@@ -25,6 +27,8 @@ namespace PdfSignatureVerifier.App
 
     public partial class MainWindow : Window
     {
+        private readonly EutlService _eutlService;
+
         public MainWindow()
         {
             InitializeComponent();
@@ -61,7 +65,6 @@ namespace PdfSignatureVerifier.App
 
                     if (signatureNames.Count == 0)
                     {
-                        // Geen cryptografische handtekening gevonden -> SES
                         return new AnalysisResult
                         {
                             Level = AnalysisResult.SignatureLevel.SES,
@@ -75,19 +78,17 @@ namespace PdfSignatureVerifier.App
                         };
                     }
 
-                    // Voor nu doen we een simpele cryptografische check.
-                    // De ECHTE QES/AES check is de volgende stap.
-                    // We simuleren het resultaat voor nu.
                     var name = signatureNames[0]; // We analyseren de eerste handtekening
                     PdfPKCS7 pkcs7 = signatureUtil.ReadSignatureData(name);
-                    bool isValid = pkcs7.VerifySignatureIntegrityAndAuthenticity();
                     IX509Certificate signingCert = pkcs7.GetSigningCertificate();
                     string signerName = CertificateInfo.GetSubjectFields(signingCert)?.GetField("CN") ?? "Onbekende Ondertekenaar";
 
-                    // TODO: Implementeer hier de ECHTE check tegen de EU Trust List.
-                    // Voor nu, simuleren we een AES.
-                    if (isValid)
+                    // De basisintegriteitscheck
+                    bool isSignatureValid = pkcs7.VerifySignatureIntegrityAndAuthenticity();
+
+                    if (isSignatureValid)
                     {
+                        // Handtekening is cryptografisch geldig -> AES (voor nu)
                         return new AnalysisResult
                         {
                             Level = AnalysisResult.SignatureLevel.AES,
@@ -96,21 +97,60 @@ namespace PdfSignatureVerifier.App
                             SignerInfo = $"Ondertekend door: {signerName}",
                             Explanation = "Het document bevat een cryptografisch geldige handtekening. Dit wordt geclassificeerd als een Geavanceerde Elektronische Handtekening (AES).\n\n" +
                                           "Wat betekent dit?\n" +
-                                          "Een AES is uniek verbonden met de ondertekenaar en het document. Wijzigingen in het document ná ondertekening kunnen worden gedetecteerd. Deze handtekening is echter (nog) niet geverifieerd tegen de officiële EU Trust List en telt daarom niet als 'Gekwalificeerd'.\n\n" +
-                                          // TODO: Implementeer SSCD (token) check
-                                          "De analyse kon nog niet vaststellen of er een hardware token (zoals een smartcard) is gebruikt."
+                                          "Een AES is uniek verbonden met de ondertekenaar en het document. Wijzigingen in het document ná ondertekening kunnen worden gedetecteerd. Deze handtekening is echter (nog) niet geverifieerd tegen de officiële EU Trust List en telt daarom niet als 'Gekwalificeerd'."
                         };
                     }
                     else
                     {
-                        // In een echt scenario zou dit een 'Ongeldige Handtekening' zijn
-                        return new AnalysisResult { Level = AnalysisResult.SignatureLevel.SES, Title = "ONGELDIGE Handtekening", Color = new SolidColorBrush(Colors.Red), Explanation = "De handtekening in het document is cryptografisch ONGELDIG. Het document is mogelijk aangepast na ondertekening." };
+                        // De basisconclusie is dat de handtekening ongeldig is.
+                        // Laten we nu een lijst van specifieke problemen voor de gebruiker verzamelen.
+                        var issues = new List<string>();
+
+                        // Detail 1: Controleer de geldigheid van het certificaat op de datum van ondertekening.
+                        // Dit doen we in een 'try-catch' blok, want de analyse kan zelf een fout geven.
+                        try
+                        {
+                            // Converteer het iText certificaat naar een volledig BouncyCastle certificaat
+                            var parser = new X509CertificateParser();
+                            var bouncyCastleCert = parser.ReadCertificate(signingCert.GetEncoded());
+
+                            // Laat BouncyCastle de datums controleren. Als dit een fout geeft, vangen we die op.
+                            bouncyCastleCert.CheckValidity(pkcs7.GetSignDate());
+                        }
+                        catch (Exception certEx)
+                        {
+                            // We vonden een specifiek probleem met de geldigheid van het certificaat.
+                            issues.Add($"Het gebruikte certificaat was niet geldig op de datum van ondertekening. Details: {certEx.Message}");
+                        }
+
+                        // Detail 2: Controleer of de handtekening het hele document dekt.
+                        if (!signatureUtil.SignatureCoversWholeDocument(name))
+                        {
+                            issues.Add("De handtekening dekt niet het volledige document. Dit kan betekenen dat er later niet-ondertekende content is toegevoegd.");
+                        }
+
+                        // Als we na de detail-checks nog steeds geen specifieke reden hebben,
+                        // geven we de meest waarschijnlijke algemene reden.
+                        if (issues.Count == 0)
+                        {
+                            issues.Add("De cryptografische integriteit van de handtekening is verbroken. Dit duidt er meestal op dat het document is gewijzigd NADAT de handtekening is geplaatst.");
+                        }
+
+                        return new AnalysisResult
+                        {
+                            Level = AnalysisResult.SignatureLevel.SES,
+                            Title = "ONGELDIGE Handtekening Gevonden",
+                            Color = new SolidColorBrush(Colors.Red),
+                            SignerInfo = $"Ondertekenaar (volgens certificaat): {signerName}",
+                            Explanation = "Er is een cryptografische handtekening gevonden, maar deze is ONGELDIG. De integriteit en/of authenticiteit van het document is niet gegarandeerd.\n\n" +
+                                          $"Gevonden Problemen:\n- {string.Join("\n- ", issues)}"
+                        };
                     }
                 }
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                return new AnalysisResult { Level = AnalysisResult.SignatureLevel.SES, Title = "Fout bij Analyse", Color = new SolidColorBrush(Colors.Red), Explanation = "Er is een technische fout opgetreden bij het lezen van de PDF. Het is mogelijk dat het bestand corrupt is of geen standaard PDF-structuur heeft." };
+                return new AnalysisResult { Level = AnalysisResult.SignatureLevel.SES, Title = "Fout bij Analyse", Color = new SolidColorBrush(Colors.Red), Explanation = $"Er is een technische fout opgetreden bij het lezen van de handtekening: {ex.Message}" };
             }
         }
 
@@ -130,5 +170,14 @@ namespace PdfSignatureVerifier.App
             // De 'file:///' prefix is belangrijk om de browser te vertellen dat het een lokaal bestand is
             PdfWebView.Source = new Uri($"file:///{filePath}");
         }
+
+
+        private async void UpdateTrustListStatusAsync()
+        {
+            TrustListStatusText.Text = "Bezig met bijwerken EU Trust List...";
+            string status = await _eutlService.UpdateTrustListAsync();
+            TrustListStatusText.Text = status;
+        }
+
     }
 }
