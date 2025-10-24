@@ -34,7 +34,6 @@ C:\Users\User\source\repos\PDF\pdf-signature-verifier\PdfSignatureVerifier.App\o
 C:\Users\User\source\repos\PDF\pdf-signature-verifier\PdfSignatureVerifier.App\obj\Debug\net8.0-windows\MainWindow.g.cs
 C:\Users\User\source\repos\PDF\pdf-signature-verifier\PdfSignatureVerifier.App\obj\Debug\net8.0-windows\App.g.cs
 C:\Users\User\source\repos\PDF\pdf-signature-verifier\PdfSignatureVerifier.App\obj\Debug\net8.0-windows\PdfSignatureVerifier.App_MarkupCompile.cache
-C:\Users\User\source\repos\PDF\pdf-signature-verifier\PdfSignatureVerifier.App\obj\Debug\net8.0-windows\PdfSignatureVerifier.App_MarkupCompile.lref
 C:\Users\User\source\repos\PDF\pdf-signature-verifier\PdfSignatureVerifier.App\obj\Debug\net8.0-windows\MainWindow.baml
 C:\Users\User\source\repos\PDF\pdf-signature-verifier\PdfSignatureVerifier.App\obj\Debug\net8.0-windows\PdfSignatureVerifier.App.g.resources
 C:\Users\User\source\repos\PDF\pdf-signature-verifier\PdfSignatureVerifier.App\obj\Debug\net8.0-windows\PdfSignatureVerifier.App.GeneratedMSBuildEditorConfig.editorconfig
@@ -47,3 +46,14 @@ C:\Users\User\source\repos\PDF\pdf-signature-verifier\PdfSignatureVerifier.App\o
 C:\Users\User\source\repos\PDF\pdf-signature-verifier\PdfSignatureVerifier.App\obj\Debug\net8.0-windows\PdfSignatureVerifier.App.pdb
 C:\Users\User\source\repos\PDF\pdf-signature-verifier\PdfSignatureVerifier.App\obj\Debug\net8.0-windows\PdfSignatureVerifier.App.genruntimeconfig.cache
 C:\Users\User\source\repos\PDF\pdf-signature-verifier\PdfSignatureVerifier.App\obj\Debug\net8.0-windows\ref\PdfSignatureVerifier.App.dll
+C:\Users\User\source\repos\PDF\pdf-signature-verifier\PdfSignatureVerifier.App\bin\Debug\net8.0-windows\runtimes\win-x86\native\WebView2Loader.dll
+C:\Users\User\source\repos\PDF\pdf-signature-verifier\PdfSignatureVerifier.App\bin\Debug\net8.0-windows\runtimes\win-x64\native\WebView2Loader.dll
+C:\Users\User\source\repos\PDF\pdf-signature-verifier\PdfSignatureVerifier.App\bin\Debug\net8.0-windows\runtimes\win-arm64\native\WebView2Loader.dll
+C:\Users\User\source\repos\PDF\pdf-signature-verifier\PdfSignatureVerifier.App\bin\Debug\net8.0-windows\Microsoft.Web.WebView2.Core.dll
+C:\Users\User\source\repos\PDF\pdf-signature-verifier\PdfSignatureVerifier.App\bin\Debug\net8.0-windows\Microsoft.Web.WebView2.WinForms.dll
+C:\Users\User\source\repos\PDF\pdf-signature-verifier\PdfSignatureVerifier.App\bin\Debug\net8.0-windows\Microsoft.Web.WebView2.Wpf.dll
+C:\Users\User\source\repos\PDF\pdf-signature-verifier\PdfSignatureVerifier.App\bin\Debug\net8.0-windows\Microsoft.Web.WebView2.Core.xml
+C:\Users\User\source\repos\PDF\pdf-signature-verifier\PdfSignatureVerifier.App\bin\Debug\net8.0-windows\Microsoft.Web.WebView2.WinForms.xml
+C:\Users\User\source\repos\PDF\pdf-signature-verifier\PdfSignatureVerifier.App\bin\Debug\net8.0-windows\Microsoft.Web.WebView2.Wpf.xml
+C:\Users\User\source\repos\PDF\pdf-signature-verifier\PdfSignatureVerifier.App\obj\Debug\net8.0-windows\PdfSignatureVerifier.App_Content.g.cs
+C:\Users\User\source\repos\PDF\pdf-signature-verifier\PdfSignatureVerifier.App\obj\Debug\net8.0-windows\PdfSignatureVerifier.App.sourcelink.json

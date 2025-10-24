@@ -2,14 +2,27 @@
 using System;
 using System.IO;
 using System.Windows;
+using System.Windows.Media;
 
-// Correcte 'using' statements voor de moderne iText API
+// iText & BouncyCastle using statements
 using iText.Kernel.Pdf;
 using iText.Signatures;
 using iText.Commons.Bouncycastle.Cert;
 
 namespace PdfSignatureVerifier.App
 {
+    // Een class om de resultaten van onze analyse netjes te structureren
+    public class AnalysisResult
+    {
+        public enum SignatureLevel { QES, AES, SES }
+
+        public SignatureLevel Level { get; set; }
+        public string Title { get; set; }
+        public string Explanation { get; set; }
+        public SolidColorBrush Color { get; set; }
+        public string SignerInfo { get; set; } = string.Empty;
+    }
+
     public partial class MainWindow : Window
     {
         public MainWindow()
@@ -25,14 +38,19 @@ namespace PdfSignatureVerifier.App
                 Title = "Selecteer een PDF-bestand"
             };
 
-            if (openFileDialog.ShowDialog() != true)
-            {
-                return;
-            }
+            if (openFileDialog.ShowDialog() != true) return;
 
             string filePath = openFileDialog.FileName;
-            InfoTextBlock.Text = $"Analyse gestart voor:\n{Path.GetFileName(filePath)}";
 
+            // Voer de analyse uit en krijg een gestructureerd resultaat terug
+            AnalysisResult result = PerformAnalysis(filePath);
+
+            // Update de UI met de resultaten
+            UpdateUIWithResult(result, filePath);
+        }
+
+        private AnalysisResult PerformAnalysis(string filePath)
+        {
             try
             {
                 using (var pdfReader = new PdfReader(filePath))
@@ -43,40 +61,74 @@ namespace PdfSignatureVerifier.App
 
                     if (signatureNames.Count == 0)
                     {
-                        MessageBox.Show("Geen cryptografische handtekeningen gevonden in dit document.", "Analyse Resultaat", MessageBoxButton.OK, MessageBoxImage.Information);
-                        return;
+                        // Geen cryptografische handtekening gevonden -> SES
+                        return new AnalysisResult
+                        {
+                            Level = AnalysisResult.SignatureLevel.SES,
+                            Title = "Geen Geavanceerde/Gekwalificeerde Handtekening",
+                            Color = new SolidColorBrush(Colors.Orange),
+                            Explanation = "Dit programma heeft geen cryptografisch geldige elektronische handtekening (AES of QES) gevonden.\n\n" +
+                                          "Wat betekent dit?\n" +
+                                          "De PDF kan nog steeds een Standaard Elektronische Handtekening (SES) bevatten. Denk hierbij aan een ingeplakte scan van een 'natte' handtekening of een handtekening gezet met een muis of digitale pen. Dit programma kan de geldigheid van zo'n handtekening niet controleren.\n\n" +
+                                          "Wat moet u zelf controleren?\n" +
+                                          "Beoordeel visueel of u de handtekening in het document vertrouwt en of deze van de juiste persoon afkomstig lijkt te zijn."
+                        };
                     }
 
-                    string resultMessage = $"Er zijn {signatureNames.Count} handtekening(en) gevonden:\n\n";
+                    // Voor nu doen we een simpele cryptografische check.
+                    // De ECHTE QES/AES check is de volgende stap.
+                    // We simuleren het resultaat voor nu.
+                    var name = signatureNames[0]; // We analyseren de eerste handtekening
+                    PdfPKCS7 pkcs7 = signatureUtil.ReadSignatureData(name);
+                    bool isValid = pkcs7.VerifySignatureIntegrityAndAuthenticity();
+                    IX509Certificate signingCert = pkcs7.GetSigningCertificate();
+                    string signerName = CertificateInfo.GetSubjectFields(signingCert)?.GetField("CN") ?? "Onbekende Ondertekenaar";
 
-                    foreach (var name in signatureNames)
+                    // TODO: Implementeer hier de ECHTE check tegen de EU Trust List.
+                    // Voor nu, simuleren we een AES.
+                    if (isValid)
                     {
-                        // --- DE FINALE, CORRECTE WORKFLOW ---
-
-                        // Stap 1: Gebruik de SignatureUtil om de cryptografische data te lezen.
-                        // DEZE METHODE IS VAN signatureUtil, NIET van PdfSignature.
-                        PdfPKCS7 pkcs7 = signatureUtil.ReadSignatureData(name);
-
-                        // Stap 2: Verifieer de handtekening met de data die we net hebben gelezen.
-                        bool isValid = pkcs7.VerifySignatureIntegrityAndAuthenticity();
-
-                        // Stap 3: Haal het certificaat op van hetzelfde pkcs7 object.
-                        IX509Certificate signingCert = pkcs7.GetSigningCertificate();
-
-                        var subjectFields = CertificateInfo.GetSubjectFields(signingCert);
-                        string signerName = subjectFields?.GetField("CN") ?? "Onbekende Ondertekenaar";
-
-                        string validityStatus = isValid ? "GELDIG" : "ONGELDIG";
-                        resultMessage += $"- Ondertekend door: {signerName} (Status: {validityStatus})\n";
+                        return new AnalysisResult
+                        {
+                            Level = AnalysisResult.SignatureLevel.AES,
+                            Title = "Geavanceerde Handtekening (AES)",
+                            Color = new SolidColorBrush(Colors.DodgerBlue),
+                            SignerInfo = $"Ondertekend door: {signerName}",
+                            Explanation = "Het document bevat een cryptografisch geldige handtekening. Dit wordt geclassificeerd als een Geavanceerde Elektronische Handtekening (AES).\n\n" +
+                                          "Wat betekent dit?\n" +
+                                          "Een AES is uniek verbonden met de ondertekenaar en het document. Wijzigingen in het document ná ondertekening kunnen worden gedetecteerd. Deze handtekening is echter (nog) niet geverifieerd tegen de officiële EU Trust List en telt daarom niet als 'Gekwalificeerd'.\n\n" +
+                                          // TODO: Implementeer SSCD (token) check
+                                          "De analyse kon nog niet vaststellen of er een hardware token (zoals een smartcard) is gebruikt."
+                        };
                     }
-
-                    MessageBox.Show(resultMessage, "Analyse Resultaat");
+                    else
+                    {
+                        // In een echt scenario zou dit een 'Ongeldige Handtekening' zijn
+                        return new AnalysisResult { Level = AnalysisResult.SignatureLevel.SES, Title = "ONGELDIGE Handtekening", Color = new SolidColorBrush(Colors.Red), Explanation = "De handtekening in het document is cryptografisch ONGELDIG. Het document is mogelijk aangepast na ondertekening." };
+                    }
                 }
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                MessageBox.Show($"Er is een fout opgetreden bij het lezen van de PDF:\n\n{ex.Message}", "Fout", MessageBoxButton.OK, MessageBoxImage.Error);
+                return new AnalysisResult { Level = AnalysisResult.SignatureLevel.SES, Title = "Fout bij Analyse", Color = new SolidColorBrush(Colors.Red), Explanation = "Er is een technische fout opgetreden bij het lezen van de PDF. Het is mogelijk dat het bestand corrupt is of geen standaard PDF-structuur heeft." };
             }
+        }
+
+        private void UpdateUIWithResult(AnalysisResult result, string filePath)
+        {
+            // Update het resultaatpaneel
+            ResultPanel.BorderBrush = result.Color;
+            ResultTitle.Text = result.Title;
+            ResultTitle.Foreground = result.Color;
+            ResultFilename.Text = $"Bestand: {Path.GetFileName(filePath)}\n{result.SignerInfo}";
+            ResultExplanation.Text = result.Explanation;
+
+            // Maak het resultaatpaneel zichtbaar
+            ResultPanel.Visibility = Visibility.Visible;
+
+            // Laad de PDF in de viewer
+            // De 'file:///' prefix is belangrijk om de browser te vertellen dat het een lokaal bestand is
+            PdfWebView.Source = new Uri($"file:///{filePath}");
         }
     }
 }

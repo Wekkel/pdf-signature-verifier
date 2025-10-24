@@ -55,6 +55,10 @@
               "target": "Package",
               "version": "[2.6.2, )"
             },
+            "Microsoft.Web.WebView2": {
+              "target": "Package",
+              "version": "[1.0.3537.50, )"
+            },
             "itext": {
               "target": "Package",
               "version": "[9.3.0, )"

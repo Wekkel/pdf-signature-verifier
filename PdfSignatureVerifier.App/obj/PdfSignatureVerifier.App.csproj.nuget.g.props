@@ -15,5 +15,6 @@
   </ItemGroup>
   <PropertyGroup Condition=" '$(ExcludeRestorePackageImports)' != 'true' ">
     <PkgNewtonsoft_Json Condition=" '$(PkgNewtonsoft_Json)' == '' ">C:\Users\User\.nuget\packages\newtonsoft.json\9.0.1</PkgNewtonsoft_Json>
+    <PkgMicrosoft_Web_WebView2 Condition=" '$(PkgMicrosoft_Web_WebView2)' == '' ">C:\Users\User\.nuget\packages\microsoft.web.webview2\1.0.3537.50</PkgMicrosoft_Web_WebView2>
   </PropertyGroup>
 </Project>
