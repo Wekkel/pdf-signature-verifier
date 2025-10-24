@@ -1,0 +1,15 @@
+﻿<Window x:Class="PdfSignatureVerifier.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:PdfSignatureVerifier.App"
+        mc:Ignorable="d"
+        Title="MainWindow" Height="450" Width="800">
+    <Grid>
+        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Margin="20">
+            <TextBlock Name="InfoTextBlock" Text="Selecteer een PDF-bestand om te analyseren" FontSize="16" Margin="0,0,0,20" TextAlignment="Center" TextWrapping="Wrap"/>
+            <Button Name="SelectPdfButton" Content="Selecteer PDF" Width="200" Height="40" FontSize="14" Click="SelectPdfButton_Click"/>
+        </StackPanel>
+    </Grid>
+</Window>
