@@ -28,6 +28,8 @@ namespace PdfSignatureVerifier.App
         public Dictionary<string, byte[]> CrlCache { get; private set; } = new Dictionary<string, byte[]>();
         public DateTime LastUpdated { get; private set; }
 
+        public HashSet<string> RevokedSerialNumbers { get; private set; } = new HashSet<string>();
+
         public EutlService()
         {
             string appDataPath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
@@ -36,6 +38,7 @@ namespace PdfSignatureVerifier.App
             _cacheFilePath = Path.Combine(appFolder, "eutl-cache.json");
         }
 
+        // VERVANG DEZE METHODE:
         public string LoadFromCache()
         {
             try
@@ -48,10 +51,19 @@ namespace PdfSignatureVerifier.App
 
                     var parser = new X509CertificateParser();
                     TrustedCertificates = cacheData.TrustedCertificatesB64.Select(b64 => parser.ReadCertificate(Convert.FromBase64String(b64))).ToList();
-                    CrlCache = cacheData.CrlsB64.ToDictionary(kvp => kvp.Key, kvp => Convert.FromBase64String(kvp.Value));
+
+                    // Controleer of de CrlsB64 data bestaat in de cache
+                    if (cacheData.CrlsB64 != null)
+                    {
+                        CrlCache = cacheData.CrlsB64.ToDictionary(kvp => kvp.Key, kvp => Convert.FromBase64String(kvp.Value));
+                    }
 
                     LastUpdated = cacheData.LastUpdated;
-                    return $"EU Trust & CRL lijsten geladen uit cache ({TrustedCertificates.Count} certificaten, {CrlCache.Count} CRLs). Laatst bijgewerkt: {LastUpdated:dd-MM-yyyy HH:mm} UTC.";
+
+                    // Verwerk de geladen CRLs naar de Master Zwarte Lijst
+                    ProcessCrlsToBlacklist();
+
+                    return $"EU lijsten geladen uit cache ({TrustedCertificates.Count} certs, {RevokedSerialNumbers.Count} ingetrokken serienummers). Laatst bijgewerkt: {LastUpdated:dd-MM-yyyy HH:mm} UTC.";
                 }
                 return "Geen lokale EU Trust List cache gevonden.";
             }
@@ -61,58 +73,34 @@ namespace PdfSignatureVerifier.App
             }
         }
 
+        // VERVANG DEZE METHODE:
         public async Task<string> UpdateTrustListAsync(Action<string> updateCallback)
         {
-            // Definieer de paden voor de cache en de gedownloade TSL XMLs
-            string appDataFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "PdfSignatureVerifier");
-            string tslXmlCacheFolder = Path.Combine(appDataFolder, "TSL_XML_Cache");
-            Directory.CreateDirectory(tslXmlCacheFolder);
-
             try
             {
                 using (var httpClient = new HttpClient())
                 {
-                    httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("PdfSignatureVerifier/1.0 (Windows; .NET)");
-
+                    httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("PdfSignatureVerifier/1.0");
                     updateCallback("Hoofdlijst downloaden...");
                     var lotlXmlString = await httpClient.GetStringAsync(EU_LOTL_URL);
                     var lotlXml = XDocument.Parse(lotlXmlString);
                     var tslUrls = lotlXml.Descendants().Where(e => e.Name.LocalName == "TSLLocation").Select(e => e.Value).Where(url => !string.IsNullOrEmpty(url)).ToList();
 
-                    if (!tslUrls.Any())
-                    {
-                        return "Update mislukt: geen links naar landenlijsten gevonden in de hoofdlijst.";
-                    }
+                    if (!tslUrls.Any()) return "Update mislukt: geen links gevonden in hoofdlijst.";
 
                     var allCerts = new List<X509Certificate>();
                     var allCrlUrls = new HashSet<string>();
                     var parser = new X509CertificateParser();
                     int failedTslDownloads = 0;
 
-                    updateCallback($"Landenlijsten verwerken ({tslUrls.Count} totaal)...");
+                    updateCallback($"Landenlijsten parsen ({tslUrls.Count} totaal)...");
                     foreach (var url in tslUrls)
                     {
-                        // We verwerken alleen XML-bestanden
-                        if (!url.EndsWith(".xml", StringComparison.OrdinalIgnoreCase))
-                        {
-                            continue;
-                        }
-
-                        string fileName = Path.GetFileName(new Uri(url).AbsolutePath);
-                        if (string.IsNullOrEmpty(fileName))
-                        {
-                            fileName = Guid.NewGuid() + ".xml";
-                        }
-                        string tslFilePath = Path.Combine(tslXmlCacheFolder, fileName);
-
+                        if (!url.EndsWith(".xml", StringComparison.OrdinalIgnoreCase)) continue;
                         try
                         {
                             var tslXmlString = await httpClient.GetStringAsync(url);
-                            File.WriteAllText(tslFilePath, tslXmlString); // Sla het bestand permanent op voor inspectie
-
                             var tslXml = XDocument.Parse(tslXmlString);
-
-                            // Parse certificaten uit de TSL
                             var certNodes = tslXml.Descendants().Where(e => e.Name.LocalName == "X509Certificate");
                             foreach (var certNode in certNodes)
                             {
@@ -120,43 +108,22 @@ namespace PdfSignatureVerifier.App
                                 allCerts.AddRange(parser.ReadCertificates(new MemoryStream(certBytes)).Cast<X509Certificate>());
                             }
 
-                            // Vind CRL URLs in de TSL
-                            // Zoek #1: De 'standaard' manier via URI-tags.
-                            var crlUris = tslXml.Descendants()
-                                                .Where(e => e.Name.LocalName == "URI")
-                                                .Select(uri => uri.Value.Trim());
-
+                            var crlUris = tslXml.Descendants().Where(e => e.Name.LocalName == "URI").Select(uri => uri.Value.Trim());
                             foreach (var crlUrl in crlUris)
                             {
-                                if (crlUrl.EndsWith(".crl", StringComparison.OrdinalIgnoreCase))
-                                {
-                                    allCrlUrls.Add(crlUrl);
-                                }
+                                if (crlUrl.EndsWith(".crl", StringComparison.OrdinalIgnoreCase)) allCrlUrls.Add(crlUrl);
                             }
 
-                            // Zoek #2: De manier die u heeft gevonden via ServiceSupplyPoint-tags.
-                            var serviceSupplyPoints = tslXml.Descendants()
-                                                            .Where(e => e.Name.LocalName == "ServiceSupplyPoint")
-                                                            .Select(ssp => ssp.Value.Trim());
-
+                            var serviceSupplyPoints = tslXml.Descendants().Where(e => e.Name.LocalName == "ServiceSupplyPoint").Select(ssp => ssp.Value.Trim());
                             foreach (var crlUrl in serviceSupplyPoints)
                             {
-                                if (crlUrl.EndsWith(".crl", StringComparison.OrdinalIgnoreCase))
-                                {
-                                    allCrlUrls.Add(crlUrl);
-                                }
+                                if (crlUrl.EndsWith(".crl", StringComparison.OrdinalIgnoreCase)) allCrlUrls.Add(crlUrl);
                             }
                         }
-                        catch
-                        {
-                            failedTslDownloads++;
-                        }
+                        catch { failedTslDownloads++; }
                     }
 
-                    if (!allCerts.Any())
-                    {
-                        return "Update voltooid, maar geen certificaten gevonden in de gedownloade EU-lijsten.";
-                    }
+                    if (!allCerts.Any()) return "Update mislukt: geen certificaten gevonden.";
 
                     TrustedCertificates = allCerts.DistinctBy(c => c.GetHashCode()).ToList();
 
@@ -177,11 +144,13 @@ namespace PdfSignatureVerifier.App
                     LastUpdated = DateTime.UtcNow;
                     SaveToCache();
 
-                    // Bouw de definitieve statusmelding
-                    string finalStatus = $"EU lijsten succesvol bijgewerkt ({TrustedCertificates.Count} certificaten, {CrlCache.Count} CRLs).";
+                    // Verwerk de nieuw gedownloade CRLs
+                    ProcessCrlsToBlacklist();
+
+                    string finalStatus = $"EU lijsten succesvol bijgewerkt ({TrustedCertificates.Count} certs, {RevokedSerialNumbers.Count} ingetrokken serienummers).";
                     if (failedTslDownloads > 0)
                     {
-                        finalStatus += $" Opmerking: {failedTslDownloads} van de {tslUrls.Count} landenlijst(en) konden niet worden geladen.";
+                        finalStatus += $" Opmerking: {failedTslDownloads} landenlijst(en) konden niet worden geladen.";
                     }
                     return finalStatus;
                 }
@@ -202,6 +171,31 @@ namespace PdfSignatureVerifier.App
             };
             var cacheJson = JsonSerializer.Serialize(cacheData);
             File.WriteAllText(_cacheFilePath, cacheJson);
+        }
+
+        private void ProcessCrlsToBlacklist()
+        {
+            var blacklist = new HashSet<string>();
+            var crlParser = new X509CrlParser();
+
+            if (CrlCache == null) return;
+
+            foreach (var crlData in CrlCache.Values)
+            {
+                try
+                {
+                    var crl = crlParser.ReadCrl(crlData);
+                    var revoked = crl.GetRevokedCertificates();
+                    if (revoked == null) continue;
+
+                    foreach (X509CrlEntry entry in revoked)
+                    {
+                        blacklist.Add(entry.SerialNumber.ToString());
+                    }
+                }
+                catch { /* Negeer corrupte CRL-bestanden */ }
+            }
+            RevokedSerialNumbers = blacklist;
         }
     }
 }

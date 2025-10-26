@@ -241,8 +241,6 @@ namespace PdfSignatureVerifier.App
             try
             {
                 var parser = new X509CertificateParser();
-                var crlParser = new X509CrlParser();
-
                 var certChainFromPdf = pkcs7.GetSignCertificateChain()
                     .Select(c => parser.ReadCertificate(c.GetEncoded()))
                     .ToList();
@@ -252,34 +250,19 @@ namespace PdfSignatureVerifier.App
                     return false;
                 }
 
-                // --- DE NIEUWE, DIRECTE CRL-CHECK ---
-                // Maak een lijst van alle gedownloade CRL-objecten
-                var allCrls = _eutlService.CrlCache.Values
-                    .Select(crlData => crlParser.ReadCrl(crlData))
-                    .ToList();
-
-                // Controleer elk certificaat in de keten van de PDF
+                // --- DE NIEUWE, SNELLE CRL-CHECK ---
+                // Controleer elk certificaat in de keten tegen de 'Master Zwarte Lijst'.
                 foreach (var certInChain in certChainFromPdf)
                 {
-                    // Zoek de relevante CRLs voor dit certificaat (uitgegeven door dezelfde partij)
-                    foreach (var crl in allCrls)
+                    if (_eutlService.RevokedSerialNumbers.Contains(certInChain.SerialNumber.ToString()))
                     {
-                        if (crl.IssuerDN.Equivalent(certInChain.IssuerDN))
-                        {
-                            if (crl.GetRevokedCertificate(certInChain.SerialNumber) != null)
-                            {
-                                // GEVONDEN OP ZWARTE LIJST!
-                                // De hele keten is per definitie ongeldig.
-                                return false;
-                            }
-                        }
+                        // GEVONDEN OP ZWARTE LIJST! De hele keten is per definitie ongeldig.
+                        return false;
                     }
                 }
                 // --- EINDE CRL-CHECK ---
 
-                // Uw bestaande, werkende QES-anker check.
                 var trustedEutlCerts = _eutlService.TrustedCertificates.ToHashSet();
-
                 for (int i = 0; i < certChainFromPdf.Count; i++)
                 {
                     var subjectCert = certChainFromPdf[i];
@@ -294,18 +277,12 @@ namespace PdfSignatureVerifier.App
                             }
                             return true;
                         }
-                        catch
-                        {
-                            return false;
-                        }
+                        catch { return false; }
                     }
                 }
                 return false;
             }
-            catch
-            {
-                return false;
-            }
+            catch { return false; }
         }
 
         private void UpdateUIWithResult(AnalysisResult result, string filePath)
