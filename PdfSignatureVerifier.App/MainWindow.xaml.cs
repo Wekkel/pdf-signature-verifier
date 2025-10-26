@@ -41,25 +41,32 @@ namespace PdfSignatureVerifier.App
         {
             await PdfWebView.EnsureCoreWebView2Async(null);
 
-            // Functie om zowel de zichtbare als de onzichtbare log bij te werken
+            // Functie om de log netjes bij te werken
             void UpdateLog(string text)
             {
                 TrustListStatusText.Text = text;
-                LogTextBox.Text = text; // Houd de volledige log bij in de verborgen TextBox
+                LogTextBox.Text = text;
             }
 
-            // Stap 1: Laad direct de cache
+            // Stap 1: Laad direct wat er in de cache zit en toon de status.
             string initialStatus = _eutlService.LoadFromCache();
             UpdateLog(initialStatus);
 
-            // Stap 2: Probeer op de achtergrond een update uit te voeren.
-            string currentLog = LogTextBox.Text;
-            UpdateLog(currentLog + " (Bezig met zoeken naar updates...)");
+            var cacheMaxAge = TimeSpan.FromDays(7);
+            bool isCacheMissing = !_eutlService.TrustedCertificates.Any();
+            bool isCacheOld = (DateTime.UtcNow - _eutlService.LastUpdated) > cacheMaxAge;
 
-            string updateStatus = await _eutlService.UpdateTrustListAsync();
+            // Stap 2: Bepaal of een update nodig is.
+            if (isCacheMissing || isCacheOld)
+            {
+                string reason = isCacheMissing ? "Geen cache gevonden" : "Cache is verouderd";
+                UpdateLog(LogTextBox.Text + $" ({reason}, bezig met downloaden...)");
 
-            // Stap 3: Toon het definitieve resultaat
-            UpdateLog(updateStatus);
+                // Stap 3: Voer de update uit en toon het resultaat.
+                string updateStatus = await _eutlService.UpdateTrustListAsync();
+                UpdateLog(updateStatus);
+            }
+            // Als de cache niet leeg en niet te oud is, doen we niets. De app is klaar voor gebruik.
         }
 
         private void SelectPdfButton_Click(object sender, RoutedEventArgs e)
