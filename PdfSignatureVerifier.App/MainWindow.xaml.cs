@@ -13,6 +13,7 @@ using System.IO;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Media;
 using static System.Net.Mime.MediaTypeNames;
 
@@ -52,7 +53,7 @@ namespace PdfSignatureVerifier.App
         {
             // Stap 1: Pas de UI aan om de 'laden' status te tonen
             SelectPdfButton.IsEnabled = false;
-            SelectPdfButton.Content = "Lijsten Laden..."; // Geef directe feedback op de knop
+            SetButtonMainText("Lijsten Laden...", false); // Geef directe feedback op de knop
 
             await PdfWebView.EnsureCoreWebView2Async(null);
 
@@ -85,7 +86,7 @@ namespace PdfSignatureVerifier.App
 
             // Stap 4: Herstel de knop naar zijn normale staat
             SelectPdfButton.IsEnabled = true;
-            SelectPdfButton.Content = "Selecteer en Analyseer PDF";
+            SetButtonMainText("Selecteer en Analyseer PDF", true);
         }
 
         // VERVANG UW BESTAANDE KNOP-METHODE:
@@ -108,7 +109,7 @@ namespace PdfSignatureVerifier.App
             // 1. Reset de UI naar een 'Laden' staat.
             ResultPanel.Visibility = Visibility.Collapsed; 
             SelectPdfButton.IsEnabled = false;
-            SelectPdfButton.Content = "Analyse Bezig...";
+            SetButtonMainText("Analyse Bezig...", false);
 
             // Laad de PDF alvast in de viewer
             if (File.Exists(filePath))
@@ -144,7 +145,7 @@ namespace PdfSignatureVerifier.App
                 UpdateUIWithResult(noSigResult, filePath);
             }
             SelectPdfButton.IsEnabled = true;
-            SelectPdfButton.Content = "Selecteer en Analyseer PDF";
+            SetButtonMainText("Selecteer en Analyseer PDF", true);
         }
 
         
@@ -331,7 +332,7 @@ namespace PdfSignatureVerifier.App
                                   "De handtekening is geldig en het document is niet gewijzigd na ondertekening. Deze handtekening is echter niet geverifieerd tegen de EU Trust List en telt daarom niet als 'Gekwalificeerd'." +
                                   eutlWarning +
                                   timestampExplanation  // NIEUW: voeg timestamp uitleg toe
-                        };
+                };
             }
         }
         else
@@ -533,6 +534,20 @@ namespace PdfSignatureVerifier.App
             PdfWebView.Source = new Uri(new Uri(filePath).AbsoluteUri);
         }
 
+        private void SetButtonMainText(string text, bool showDragHint = true)
+        {
+            if (SelectPdfButtonText.Inlines.FirstOrDefault() is Run firstRun)
+            {
+                firstRun.Text = text;
+            }
+
+            // Show or hide the drag-and-drop hint by setting/clearing the text
+            if (SelectPdfButtonHint != null)
+            {
+                SelectPdfButtonHint.Text = showDragHint ? "of sleep een PDF bestand hierheen" : "";
+            }
+        }
+
         private (bool exists, bool isValid, bool isQualified, string info) AnalyzeTimestamp(PdfPKCS7 pkcs7)
         {
             try
@@ -603,12 +618,12 @@ namespace PdfSignatureVerifier.App
             if (isPdf)
             {
                 e.Effects = DragDropEffects.Copy;
-                DragDropOverlay.Visibility = Visibility.Visible; // Toon de blauwe overlay
+                //DragDropOverlay.Visibility = Visibility.Visible; // Toon de blauwe overlay
             }
             else
             {
                 e.Effects = DragDropEffects.None;
-                DragDropOverlay.Visibility = Visibility.Collapsed; // Verberg de overlay als het geen PDF is
+                //DragDropOverlay.Visibility = Visibility.Collapsed; // Verberg de overlay als het geen PDF is
             }
             e.Handled = true;
         }
@@ -616,7 +631,7 @@ namespace PdfSignatureVerifier.App
         private void LeftPanelDropTarget_DragLeave(object sender, DragEventArgs e)
         {
             // Verberg zowel de overlay als het vangnet
-            DragDropOverlay.Visibility = Visibility.Collapsed;
+            //DragDropOverlay.Visibility = Visibility.Collapsed;
             LeftPanelDropTarget.Visibility = Visibility.Collapsed;
             e.Handled = true;
         }
@@ -624,7 +639,7 @@ namespace PdfSignatureVerifier.App
         private void LeftPanelDropTarget_Drop(object sender, DragEventArgs e)
         {
             // Verberg zowel de overlay als het vangnet
-            DragDropOverlay.Visibility = Visibility.Collapsed;
+            //DragDropOverlay.Visibility = Visibility.Collapsed;
             LeftPanelDropTarget.Visibility = Visibility.Collapsed;
 
             if (e.Data.GetDataPresent(DataFormats.FileDrop))

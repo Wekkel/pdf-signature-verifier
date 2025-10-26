@@ -15,67 +15,67 @@
         </Grid.ColumnDefinitions>
 
         <!-- Linker kolom: Bediening en Resultaten -->
+        <!-- DEZE DOCKPANEL HANDELT NU ALLE DRAG EVENTS AF VOOR DE HELE KOLOM -->
         <DockPanel Grid.Column="0"
                    Margin="0,0,10,0"
                    AllowDrop="True"
-           DragEnter="LeftPanelDropTarget_DragEnter"
-           DragOver="LeftPanelDropTarget_DragOver"
-           DragLeave="LeftPanelDropTarget_DragLeave"
-           Drop="LeftPanelDropTarget_Drop">
+                   Background="Transparent"
+                   DragEnter="LeftPanelDropTarget_DragEnter"  
+            DragOver="LeftPanelDropTarget_DragOver"
+                   DragLeave="LeftPanelDropTarget_DragLeave"
+                   Drop="LeftPanelDropTarget_Drop">
+
             <!-- 1. Knop bovenaan om een PDF te selecteren -->
-            <Button Name="SelectPdfButton" DockPanel.Dock="Top" Height="50" FontSize="14" FontWeight="Bold" Click="SelectPdfButton_Click" AllowDrop="True">
-                <TextBlock TextAlignment="Center">
-                    Selecteer en Analyseer PDF
-                    <LineBreak/>  <!-- Nieuwe regel -->
-                    of drag and drop de PDF hieronder <!-- Aangepaste tekst -->
+            <Button Name="SelectPdfButton" DockPanel.Dock="Top" Height="60" FontSize="14" FontWeight="Bold" Click="SelectPdfButton_Click">
+                <TextBlock Name="SelectPdfButtonText" TextAlignment="Center" TextWrapping="Wrap" Margin="5">
+        <Run Name="SelectPdfButtonMainText" FontWeight="Bold" FontSize="14">Selecteer en Analyseer PDF</Run>
+        <LineBreak Name="SelectPdfButtonLineBreak"/>
+        <Run Name="SelectPdfButtonHint" FontSize="12" FontWeight="Normal">of sleep een PDF bestand hierheen</Run>
                 </TextBlock>
             </Button>
 
             <!-- 2. Statusbalk onderaan voor de Trust List -->
-            <StatusBar DockPanel.Dock="Bottom" Background="#F0F0F0" MinHeight="40" AllowDrop="True">
+            <StatusBar DockPanel.Dock="Bottom" Background="#F0F0F0" MinHeight="40">
+                <!-- Verwijder AllowDrop hier, DockPanel handelt dit af -->
                 <StatusBar.ContextMenu>
                     <ContextMenu>
                         <MenuItem Header="Kopieer volledige log" Click="CopyLog_Click"/>
                     </ContextMenu>
-                </StatusBar.ContextMenu>
-                <StatusBarItem>
-                    <TextBlock Name="TrustListStatusText" 
+                    </StatusBar.ContextMenu>
+                    <StatusBarItem>
+                        <TextBlock Name="TrustListStatusText" 
                                Text="EU Trust List: Initialiseren..." 
                                Foreground="Gray"
                                TextWrapping="Wrap">
-                        <TextBlock.ToolTip>
-                            <ToolTip Content="{Binding Path=Text, RelativeSource={RelativeSource AncestorType=TextBlock}}"/>
-                        </TextBlock.ToolTip>
-                    </TextBlock>
-                </StatusBarItem>
-                <TextBox Name="LogTextBox" Visibility="Collapsed"/>
+                            <TextBlock.ToolTip>
+                                <ToolTip Content="{Binding Path=Text, RelativeSource={RelativeSource AncestorType=TextBlock}}"/>
+                            </TextBlock.ToolTip>
+                        </TextBlock>
+                    </StatusBarItem>
+                    <TextBox Name="LogTextBox" Visibility="Collapsed"/>
             </StatusBar>
 
             <!-- 3. Resultaatpaneel -->
-            <Border Name="ResultPanel" BorderThickness="2" CornerRadius="5" Padding="15" Margin="0,10,0,0" Visibility="Collapsed"
-                    AllowDrop="True"
-        DragEnter="LeftPanelDropTarget_DragEnter"
-        DragOver="LeftPanelDropTarget_DragOver"
-        DragLeave="LeftPanelDropTarget_DragLeave"
-        Drop="LeftPanelDropTarget_Drop">
+            <Border Name="ResultPanel" BorderThickness="2" CornerRadius="5" Padding="15" Margin="0,10,0,0" Visibility="Collapsed">
+                <!-- Verwijder AllowDrop EN alle Drag event handlers hier, DockPanel handelt dit af -->
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel>
                         <TextBlock Name="ResultTitle" FontSize="22" FontWeight="Bold" Text="Analyse Resultaat" TextWrapping="Wrap"/>
                         <TextBlock Name="ResultFilename" TextWrapping="Wrap" Margin="0,10,0,0" Foreground="Gray"/>
-                        
+
                         <Border Name="SignatureListPanel" 
-        Visibility="Collapsed" 
-        Margin="0,10,0,10"
-        BorderThickness="1"
-        BorderBrush="LightGray"
-        CornerRadius="3">
+                                Visibility="Collapsed" 
+                                Margin="0,10,0,10"
+                                BorderThickness="1"
+                                BorderBrush="LightGray"
+                                CornerRadius="3">
                             <StackPanel>
                                 <TextBlock Text="Gevonden handtekeningen:" 
-                   FontWeight="Bold" 
-                   Margin="5"/>
+                                           FontWeight="Bold" 
+                                           Margin="5"/>
                                 <ListBox Name="SignatureListBox" 
-                 MaxHeight="150"
-                 SelectionChanged="SignatureListBox_SelectionChanged">
+                                         MaxHeight="150"
+                                         SelectionChanged="SignatureListBox_SelectionChanged">
                                     <ListBox.ItemTemplate>
                                         <DataTemplate>
                                             <Border Padding="5" Margin="2">
@@ -89,10 +89,10 @@
                                                         </TextBlock.Text>
                                                     </TextBlock>
                                                     <TextBlock Text="{Binding SignDate}" 
-                                       FontSize="11" 
-                                       Foreground="Gray"/>
+                                                               FontSize="11" 
+                                                               Foreground="Gray"/>
                                                     <TextBlock Text="{Binding Status}" 
-                                       FontSize="11">
+                                                               FontSize="11">
                                                         <TextBlock.Style>
                                                             <Style TargetType="TextBlock">
                                                                 <Style.Triggers>
@@ -123,38 +123,22 @@
             </Border>
         </DockPanel>
 
-        <!-- NIEUW TOEGEVOEGD: Het onzichtbare vangnet voor de drag-and-drop zone op het linkerpaneel -->
-        <!-- Dit vangt de drag-events op voordat de overlay getoond wordt -->
-        <Border Name="LeftPanelDropTarget"
-                Grid.Column="0"  
-                Background="Transparent"
-                AllowDrop="True"  
-                DragEnter="LeftPanelDropTarget_DragEnter"
-                DragOver="LeftPanelDropTarget_DragOver"
-                DragLeave="LeftPanelDropTarget_DragLeave"
-                Drop="LeftPanelDropTarget_Drop"
-                Visibility="Visible"  
-                Panel.ZIndex="50" />
-
         <!-- Rechter kolom: PDF Viewer -->
         <Border Grid.Column="1" BorderThickness="1" BorderBrush="LightGray">
-            <!-- AllowDrop is hier terug naar de standaardwaarde (True), 
-                 omdat WebView2 zijn eigen drag/drop gedrag mag behouden -->
             <wv2:WebView2 Name="PdfWebView" />
         </Border>
 
-
-        <!-- De ZICHTBARE overlay die we aan/uit zetten, nu alleen over de linkerkolom -->
-        <Border Name="DragDropOverlay" 
-                Grid.Column="0" 
-            Background="#AAFFFFFF" 
+        <!-- DE "LeftPanelDropTarget" IS NU ALLEEN DE ZICHTBARE OVERLAY -->
+        <!-- Deze krijgt de ZIndex van 100 en IsHitTestVisible="False" zodat het standaard doorzichtbaar is voor muisclicks -->
+        <Border Name="LeftPanelDropTarget"
+                Grid.Column="0"
+                Background="#AAFFFFFF" 
                 BorderBrush="DodgerBlue" 
                 BorderThickness="4" 
                 CornerRadius="10"
                 Panel.ZIndex="100"
-           
-            IsHitTestVisible="False" 
-                Visibility="Collapsed">
+                IsHitTestVisible="False"  
+            Visibility="Collapsed">
             <TextBlock Text="Laat het PDF-bestand hier los om te analyseren"
                        HorizontalAlignment="Center"
                        VerticalAlignment="Center"
