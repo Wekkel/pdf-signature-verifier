@@ -16,6 +16,7 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using static System.Net.Mime.MediaTypeNames;
 
+
 namespace PdfSignatureVerifier.App
 {
     public class AnalysisResult
@@ -26,7 +27,10 @@ namespace PdfSignatureVerifier.App
         public string Explanation { get; set; }
         public SolidColorBrush Color { get; set; }
         public string SignerInfo { get; set; } = string.Empty;
-        
+
+        public string TimestampInfo { get; set; } = string.Empty;
+        public bool HasQualifiedTimestamp { get; set; } = false;
+
     }
 
     public partial class MainWindow : Window
@@ -274,20 +278,30 @@ namespace PdfSignatureVerifier.App
         IX509Certificate signingCert = pkcs7.GetSigningCertificate();
         bool isValid = pkcs7.VerifySignatureIntegrityAndAuthenticity();
 
+                var (tsExists, tsValid, tsQualified, tsInfo) = AnalyzeTimestamp(pkcs7);
+                
         if (isValid)
         {
             bool isQES = IsCertificateChainQualified(pkcs7);
             if (isQES)
             {
+                        // Bereken de timestamp uitleg specifiek voor QES
+                        string timestampExplanation = tsExists && tsValid
+                            ? "\n\n✓ Deze handtekening bevat een geldige tijdstempel. Het tijdstip van ondertekening is cryptografisch beveiligd."
+                            : "\n\n⚠ Deze handtekening bevat GEEN tijdstempel. De getoonde ondertekeningsdatum komt van de computer van de ondertekenaar en kan niet onafhankelijk worden geverifieerd.";
+
                 return new AnalysisResult
                 {
                     Level = AnalysisResult.SignatureLevel.QES,
                     Title = "Gekwalificeerde Handtekening (QES)",
                     Color = new SolidColorBrush(Colors.LightGreen),
                     SignerInfo = $"Ondertekend door: {signerName}",
+                    TimestampInfo = tsInfo,  // NIEUW
+                    HasQualifiedTimestamp = tsQualified,  // NIEUW
                     Explanation = "Deze handtekening is cryptografisch geldig én is geverifieerd tegen de officiële EU Trust List. Dit is een Gekwalificeerde Elektronische Handtekening (QES).\n\n" +
                                   "Wat betekent dit?\n" +
-                                  "Een QES heeft dezelfde juridische status als een handgeschreven handtekening in de hele Europese Unie. Het biedt het hoogste niveau van zekerheid."
+                                  "Een QES heeft dezelfde juridische status als een handgeschreven handtekening in de hele Europese Unie. Het biedt het hoogste niveau van zekerheid." +
+                                  timestampExplanation  // NIEUW: voeg timestamp uitleg toe
                 };
             }
             else
@@ -299,17 +313,25 @@ namespace PdfSignatureVerifier.App
                     eutlWarning = "\n\nWAARSCHUWING: De EU Trust List kon niet worden geladen. Deze handtekening kon daarom niet op QES-status worden gecontroleerd en wordt als AES weergegeven.";
                 }
 
-                return new AnalysisResult
+                        // Bereken de timestamp uitleg specifiek voor AES
+                        string timestampExplanation = tsExists && tsValid
+                            ? "\n\n✓ Deze handtekening bevat een geldige tijdstempel."
+                            : "\n\n⚠ Deze handtekening bevat GEEN tijdstempel.";
+
+                        return new AnalysisResult
                 {
                     Level = AnalysisResult.SignatureLevel.AES,
                     Title = "Geavanceerde Handtekening (AES)",
                     Color = new SolidColorBrush(Colors.DodgerBlue),
                     SignerInfo = $"Ondertekend door: {signerName}",
+                    TimestampInfo = tsInfo,  // NIEUW
+                    HasQualifiedTimestamp = tsQualified,  // NIEUW
                     Explanation = "Het document bevat een cryptografisch geldige handtekening. Dit wordt geclassificeerd als een Geavanceerde Elektronische Handtekening (AES).\n\n" +
                                   "Wat betekent dit?\n" +
                                   "De handtekening is geldig en het document is niet gewijzigd na ondertekening. Deze handtekening is echter niet geverifieerd tegen de EU Trust List en telt daarom niet als 'Gekwalificeerd'." +
-                                  eutlWarning
-                };
+                                  eutlWarning +
+                                  timestampExplanation  // NIEUW: voeg timestamp uitleg toe
+                        };
             }
         }
         else
@@ -509,6 +531,52 @@ namespace PdfSignatureVerifier.App
 
             // Always navigate using the REAL path
             PdfWebView.Source = new Uri(new Uri(filePath).AbsoluteUri);
+        }
+
+        private (bool exists, bool isValid, bool isQualified, string info) AnalyzeTimestamp(PdfPKCS7 pkcs7)
+        {
+            try
+            {
+                // Stap 1: Controleer of er een timestamp bestaat
+                DateTime? timestampDate = pkcs7.GetTimeStampDate();
+
+                if (!timestampDate.HasValue)
+                {
+                    return (false, false, false, "Geen tijdstempel aanwezig");
+                }
+
+                // Stap 2: Verifieer de timestamp
+                bool isTimestampValid = false;
+                try
+                {
+                    isTimestampValid = pkcs7.VerifyTimestampImprint();
+                }
+                catch (Exception ex)
+                {
+                    return (true, false, false, $"Tijdstempel gevonden maar validatie mislukt: {ex.Message}");
+                }
+
+                if (!isTimestampValid)
+                {
+                    return (true, false, false, $"Tijdstempel aanwezig ({timestampDate:dd-MM-yyyy HH:mm}) maar is ONGELDIG");
+                }
+
+                // Stap 3: Timestamp is geldig
+                // We kunnen niet betrouwbaar het TSA certificaat verkrijgen, dus we tonen alleen dat er een geldige timestamp is
+                string info = $"✓ Geldige tijdstempel: {timestampDate:dd-MM-yyyy HH:mm:ss} UTC";
+
+                // Als de EUTL beschikbaar is, vermelden we dat we niet kunnen verifiëren of het gekwalificeerd is
+                if (_eutlService.TrustedCertificates != null && _eutlService.TrustedCertificates.Any())
+                {
+                    info += "\n(Verificatie tegen EU Trust List: niet ondersteund voor timestamps)";
+                }
+
+                return (true, true, false, info); // exists=true, valid=true, qualified=false (kunnen we niet bepalen)
+            }
+            catch (Exception ex)
+            {
+                return (false, false, false, $"Fout bij timestamp analyse: {ex.Message}");
+            }
         }
 
         private void CopyLog_Click(object sender, RoutedEventArgs e)
