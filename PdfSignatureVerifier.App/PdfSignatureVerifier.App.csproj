@@ -6,7 +6,26 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
+	  <AssemblyTitle>Standalone EHT Checker</AssemblyTitle>
+	  <AssemblyProduct>EHT Checker</AssemblyProduct>
+	  <AssemblyCompany>WekSoft</AssemblyCompany>
+	  <AssemblyCopyright>Copyright © WekSoft 2025</AssemblyCopyright>
+	  <AssemblyVersion>1.0.0.0</AssemblyVersion>
+	  <FileVersion>1.0.0.0</FileVersion>
+	  <Version>1.0.0</Version>
+	  <!-- Dit is de versie die AboutWindow.xaml.cs ophaalt via Assembly.GetName().Version -->
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Remove="about_box.jpg" />
+    <None Remove="Version Info.txt" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="Version Info.txt">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="BouncyCastle.Cryptography" Version="2.6.2" />
@@ -14,6 +33,10 @@
     <PackageReference Include="itext.bouncy-castle-adapter" Version="9.3.0" />
     <PackageReference Include="itext.commons" Version="9.3.0" />
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3537.50" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="about_box.jpg" />
   </ItemGroup>
 
 </Project>

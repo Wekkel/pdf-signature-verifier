@@ -11,6 +11,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
@@ -47,13 +48,17 @@ namespace PdfSignatureVerifier.App
             InitializeBackendAsync();
         }
 
-        // FOUT BLOK
-        // CORRECT BLOK
+
+        private void AboutMenuItem_Click(object sender, RoutedEventArgs e)
+        {
+            AboutWindow aboutWindow = new AboutWindow();
+            aboutWindow.ShowDialog(); // ShowDialog blokkeert de interactie met het hoofdvenster totdat de About-box is gesloten
+        }
+
         private async void InitializeBackendAsync()
         {
-            // Stap 1: Pas de UI aan om de 'laden' status te tonen
             SelectPdfButton.IsEnabled = false;
-            SetButtonMainText("Lijsten Laden...", false); // Geef directe feedback op de knop
+            SetButtonMainText("Lijsten Laden...", false);
 
             await PdfWebView.EnsureCoreWebView2Async(null);
 
@@ -63,7 +68,7 @@ namespace PdfSignatureVerifier.App
                 LogTextBox.Text = text;
             }
 
-            // Stap 2: Laad de cache
+            // Step 1: Load from cache
             string initialStatus = _eutlService.LoadFromCache();
             UpdateLog(initialStatus);
 
@@ -71,17 +76,32 @@ namespace PdfSignatureVerifier.App
             bool isCacheMissing = !_eutlService.TrustedCertificates.Any();
             bool isCacheOld = (DateTime.UtcNow - _eutlService.LastUpdated) > cacheMaxAge;
 
-            // Stap 3: Bepaal of een update nodig is
+            // Step 2: Update trust list AND CRLs if needed
             if (isCacheMissing || isCacheOld)
             {
                 string reason = isCacheMissing ? "Geen cache gevonden" : "Cache is verouderd";
                 UpdateLog(LogTextBox.Text + $" ({reason}, bezig met downloaden...)");
 
-                // DE CORRECTIE: Maak de callback functie en geef hem mee aan de methode
-                Action<string> downloadCallback = (status) => Dispatcher.Invoke(() => SelectPdfButton.Content = status);
+                Action<string> downloadCallback = (status) => Dispatcher.Invoke(() => SetButtonMainText(status, false));
                 string updateStatus = await _eutlService.UpdateTrustListAsync(downloadCallback);
 
                 UpdateLog(updateStatus);
+            }
+            // Step 3: NEW - Check if only the hash needs updating
+            else if (_eutlService.HashNeedsUpdate(cacheMaxAge))
+            {
+                UpdateLog(LogTextBox.Text + " Hash is verouderd, opnieuw bouwen...");
+                SetButtonMainText("Hash Bouwen...", false);
+
+                // Rebuild hash from cached CRLs (fast, no download needed)
+                await Task.Run(() => _eutlService.RebuildHashFromCache());
+
+                UpdateLog($"EU lijsten geladen uit cache ({_eutlService.TrustedCertificates.Count} certs, {_eutlService.RevokedSerialNumbers.Count} ingetrokken serienummers). Hash bijgewerkt op {_eutlService.HashLastUpdated:dd-MM-yyyy HH:mm} UTC.");
+            }
+            else
+            {
+                // Both cache and hash are fresh
+                UpdateLog($"EU lijsten geladen uit cache ({_eutlService.TrustedCertificates.Count} certs, {_eutlService.RevokedSerialNumbers.Count} ingetrokken serienummers). Laatst bijgewerkt: {_eutlService.LastUpdated:dd-MM-yyyy HH:mm} UTC.");
             }
 
             // Stap 4: Herstel de knop naar zijn normale staat
@@ -89,7 +109,7 @@ namespace PdfSignatureVerifier.App
             SetButtonMainText("Selecteer en Analyseer PDF", true);
         }
 
-        // VERVANG UW BESTAANDE KNOP-METHODE:
+
         private void SelectPdfButton_Click(object sender, RoutedEventArgs e)
         {
             var openFileDialog = new OpenFileDialog { Filter = "PDF Files|*.pdf", Title = "Selecteer een PDF-bestand" };
@@ -547,6 +567,31 @@ namespace PdfSignatureVerifier.App
                 SelectPdfButtonHint.Text = showDragHint ? "of sleep een PDF bestand hierheen" : "";
             }
         }
+
+        private void ExitMenuItem_Click(object sender, RoutedEventArgs e)
+        {
+            System.Windows.Application.Current.Shutdown(); // Gebruik de volledige kwalificatie
+        
+        }
+
+        private void OnlineHelpMenuItem_Click(object sender, RoutedEventArgs e)
+        {
+            // Voorbeeld: Open een URL in de standaardbrowser
+            try
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = "https://www.jouwwebsite.nl/help", // Vervang dit met je eigen help-URL
+                    UseShellExecute = true
+                });
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Kan help-pagina niet openen: {ex.Message}", "Fout", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        
 
         private (bool exists, bool isValid, bool isQualified, string info) AnalyzeTimestamp(PdfPKCS7 pkcs7)
         {
