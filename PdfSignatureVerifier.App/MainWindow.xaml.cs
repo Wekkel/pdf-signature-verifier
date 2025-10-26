@@ -1,18 +1,19 @@
-﻿using Microsoft.Win32;
+﻿using iText.Commons.Bouncycastle.Cert; // iText's interne BouncyCastle interface
+// Correcte 'using' statements voor de geïnstalleerde bibliotheken
+using iText.Kernel.Pdf;
+using iText.Layout.Element;
+using iText.Signatures;
+using Microsoft.Win32;
+using Org.BouncyCastle.Pkix;
+using Org.BouncyCastle.X509;
+using Org.BouncyCastle.X509.Store;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Windows;
 using System.Windows.Media;
-
-// Correcte 'using' statements voor de geïnstalleerde bibliotheken
-using iText.Kernel.Pdf;
-using iText.Signatures;
-using iText.Commons.Bouncycastle.Cert; // iText's interne BouncyCastle interface
-using Org.BouncyCastle.Pkix;
-using Org.BouncyCastle.X509;
-using Org.BouncyCastle.X509.Store;
+using static System.Net.Mime.MediaTypeNames;
 
 namespace PdfSignatureVerifier.App
 {
@@ -37,6 +38,8 @@ namespace PdfSignatureVerifier.App
             InitializeBackendAsync();
         }
 
+        // FOUT BLOK
+        // CORRECT BLOK
         private async void InitializeBackendAsync()
         {
             // Stap 1: Pas de UI aan om de 'laden' status te tonen
@@ -65,10 +68,10 @@ namespace PdfSignatureVerifier.App
                 string reason = isCacheMissing ? "Geen cache gevonden" : "Cache is verouderd";
                 UpdateLog(LogTextBox.Text + $" ({reason}, bezig met downloaden...)");
 
-                // Verander de knoptekst specifiek voor de download
-                SelectPdfButton.Content = "EU Lijst Downloaden...";
+                // DE CORRECTIE: Maak de callback functie en geef hem mee aan de methode
+                Action<string> downloadCallback = (status) => Dispatcher.Invoke(() => SelectPdfButton.Content = status);
+                string updateStatus = await _eutlService.UpdateTrustListAsync(downloadCallback);
 
-                string updateStatus = await _eutlService.UpdateTrustListAsync();
                 UpdateLog(updateStatus);
             }
 
@@ -168,9 +171,9 @@ namespace PdfSignatureVerifier.App
             }
         }
 
+
         private bool IsCertificateChainQualified(PdfPKCS7 pkcs7)
         {
-            // Als de EUTL-lijst niet geladen is, kunnen we niets valideren.
             if (_eutlService.TrustedCertificates == null || !_eutlService.TrustedCertificates.Any())
             {
                 return false;
@@ -179,8 +182,8 @@ namespace PdfSignatureVerifier.App
             try
             {
                 var parser = new X509CertificateParser();
+                var crlParser = new X509CrlParser();
 
-                // 1. Haal de certificaatketen uit de handtekening in de PDF.
                 var certChainFromPdf = pkcs7.GetSignCertificateChain()
                     .Select(c => parser.ReadCertificate(c.GetEncoded()))
                     .ToList();
@@ -190,49 +193,58 @@ namespace PdfSignatureVerifier.App
                     return false;
                 }
 
-                // 2. Maak een 'HashSet' van onze vertrouwde EUTL-certificaten voor snelle lookups.
-                var trustedEutlCerts = _eutlService.TrustedCertificates
-                    .Select(c => parser.ReadCertificate(c.GetEncoded()))
-                    .ToHashSet();
+                // --- DE NIEUWE, DIRECTE CRL-CHECK ---
+                // Maak een lijst van alle gedownloade CRL-objecten
+                var allCrls = _eutlService.CrlCache.Values
+                    .Select(crlData => crlParser.ReadCrl(crlData))
+                    .ToList();
 
-                // 3. De validatie: we controleren de keten van onder naar boven (van ondertekenaar naar root).
+                // Controleer elk certificaat in de keten van de PDF
+                foreach (var certInChain in certChainFromPdf)
+                {
+                    // Zoek de relevante CRLs voor dit certificaat (uitgegeven door dezelfde partij)
+                    foreach (var crl in allCrls)
+                    {
+                        if (crl.IssuerDN.Equivalent(certInChain.IssuerDN))
+                        {
+                            if (crl.GetRevokedCertificate(certInChain.SerialNumber) != null)
+                            {
+                                // GEVONDEN OP ZWARTE LIJST!
+                                // De hele keten is per definitie ongeldig.
+                                return false;
+                            }
+                        }
+                    }
+                }
+                // --- EINDE CRL-CHECK ---
+
+                // Uw bestaande, werkende QES-anker check.
+                var trustedEutlCerts = _eutlService.TrustedCertificates.ToHashSet();
+
                 for (int i = 0; i < certChainFromPdf.Count; i++)
                 {
                     var subjectCert = certChainFromPdf[i];
 
-                    // A. Is dit certificaat ZELF direct vertrouwd in de EUTL?
                     if (trustedEutlCerts.Contains(subjectCert))
-                    {
-                        // Ja! We hebben een match. Dit is een QES.
-                        return true;
-                    }
-
-                    // B. Zo niet, is de UITGEVER (issuer) van dit certificaat vertrouwd?
-                    // We zoeken naar een volgend certificaat in de keten dat deze heeft ondertekend.
-                    var issuerCert = (i + 1 < certChainFromPdf.Count) ? certChainFromPdf[i + 1] : null;
-                    if (issuerCert != null)
                     {
                         try
                         {
-                            // Controleer of de handtekening klopt.
-                            subjectCert.Verify(issuerCert.GetPublicKey());
-                            // De keten is tot hier geldig. De loop gaat verder om de issuer te checken.
+                            for (int j = 0; j < i; j++)
+                            {
+                                certChainFromPdf[j].Verify(certChainFromPdf[j + 1].GetPublicKey());
+                            }
+                            return true;
                         }
-                        catch (Exception)
+                        catch
                         {
-                            // De keten is hier verbroken. Het is geen geldige keten.
                             return false;
                         }
                     }
                 }
-
-                // Als we de hele keten hebben doorlopen en geen enkel certificaat
-                // zat in de EUTL-lijst, dan is het geen QES.
                 return false;
             }
             catch
             {
-                // Bij elke fout tijdens de validatie, gaan we uit van het veiligste: geen QES.
                 return false;
             }
         }

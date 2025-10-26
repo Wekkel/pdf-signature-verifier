@@ -11,12 +11,21 @@ using Org.BouncyCastle.X509;
 
 namespace PdfSignatureVerifier.App
 {
+    // Aparte class voor onze cache, nu met een plek voor CRLs
+    public class EutlCacheData
+    {
+        public DateTime LastUpdated { get; set; }
+        public List<string> TrustedCertificatesB64 { get; set; }
+        public Dictionary<string, string> CrlsB64 { get; set; } // Key = URL, Value = Base64 CRL data
+    }
+
     public class EutlService
     {
         private const string EU_LOTL_URL = "https://ec.europa.eu/information_society/policy/esignature/trusted-list/tl-mp.xml";
         private readonly string _cacheFilePath;
 
         public List<X509Certificate> TrustedCertificates { get; private set; } = new List<X509Certificate>();
+        public Dictionary<string, byte[]> CrlCache { get; private set; } = new Dictionary<string, byte[]>();
         public DateTime LastUpdated { get; private set; }
 
         public EutlService()
@@ -34,15 +43,15 @@ namespace PdfSignatureVerifier.App
                 if (File.Exists(_cacheFilePath))
                 {
                     var cacheJson = File.ReadAllText(_cacheFilePath);
-                    var cacheData = JsonSerializer.Deserialize<CacheData>(cacheJson);
-                    if (cacheData?.Base64Certificates == null) return "Cache is corrupt.";
+                    var cacheData = JsonSerializer.Deserialize<EutlCacheData>(cacheJson);
+                    if (cacheData?.TrustedCertificatesB64 == null) return "Cache is corrupt.";
 
                     var parser = new X509CertificateParser();
-                    TrustedCertificates = cacheData.Base64Certificates
-     .Select(b64 => parser.ReadCertificate(Convert.FromBase64String(b64)))
-     .ToList();
+                    TrustedCertificates = cacheData.TrustedCertificatesB64.Select(b64 => parser.ReadCertificate(Convert.FromBase64String(b64))).ToList();
+                    CrlCache = cacheData.CrlsB64.ToDictionary(kvp => kvp.Key, kvp => Convert.FromBase64String(kvp.Value));
+
                     LastUpdated = cacheData.LastUpdated;
-                    return $"EU Trust List geladen uit cache ({TrustedCertificates.Count} certificaten). Laatst bijgewerkt: {LastUpdated:dd-MM-yyyy HH:mm} UTC.";
+                    return $"EU Trust & CRL lijsten geladen uit cache ({TrustedCertificates.Count} certificaten, {CrlCache.Count} CRLs). Laatst bijgewerkt: {LastUpdated:dd-MM-yyyy HH:mm} UTC.";
                 }
                 return "Geen lokale EU Trust List cache gevonden.";
             }
@@ -52,10 +61,12 @@ namespace PdfSignatureVerifier.App
             }
         }
 
-        public async Task<string> UpdateTrustListAsync()
+        public async Task<string> UpdateTrustListAsync(Action<string> updateCallback)
         {
-            string debugXmlFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "PdfSignatureVerifier", "Debug_XML");
-            Directory.CreateDirectory(debugXmlFolder);
+            // Definieer de paden voor de cache en de gedownloade TSL XMLs
+            string appDataFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "PdfSignatureVerifier");
+            string tslXmlCacheFolder = Path.Combine(appDataFolder, "TSL_XML_Cache");
+            Directory.CreateDirectory(tslXmlCacheFolder);
 
             try
             {
@@ -63,120 +74,134 @@ namespace PdfSignatureVerifier.App
                 {
                     httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("PdfSignatureVerifier/1.0 (Windows; .NET)");
 
-                    string lotlXmlString;
-                    try
-                    {
-                        lotlXmlString = await httpClient.GetStringAsync(EU_LOTL_URL);
-                        File.WriteAllText(Path.Combine(debugXmlFolder, "00_EU_LOTL_SUCCESS.xml"), lotlXmlString);
-                    }
-                    catch (HttpRequestException netEx)
-                    {
-                        File.WriteAllText(Path.Combine(debugXmlFolder, "00_EU_LOTL_ERROR.txt"), netEx.ToString());
-                        return $"Update mislukt: kon de EU hoofdlijst niet downloaden. Details: {netEx.Message}";
-                    }
-
+                    updateCallback("Hoofdlijst downloaden...");
+                    var lotlXmlString = await httpClient.GetStringAsync(EU_LOTL_URL);
                     var lotlXml = XDocument.Parse(lotlXmlString);
+                    var tslUrls = lotlXml.Descendants().Where(e => e.Name.LocalName == "TSLLocation").Select(e => e.Value).Where(url => !string.IsNullOrEmpty(url)).ToList();
 
-                    // --- DE DEFINITIEVE, CORRECTE PARSER VOOR DE HOOFDLIJST ---
-                    // We definiëren de namespace die in de XML wordt gebruikt.
-                    XNamespace ns = "http://uri.etsi.org/02231/v2#";
-
-                    // We volgen nu de correcte hiërarchie:
-                    // TrustServiceStatusList -> SchemeInformation -> PointersToOtherTSL -> OtherTSLPointer -> TSLLocation
-                    var tslUrls = lotlXml.Root
-                                         .Element(ns + "SchemeInformation")?
-                                         .Element(ns + "PointersToOtherTSL")?
-                                         .Elements(ns + "OtherTSLPointer")
-                                         .Select(pointer => pointer.Element(ns + "TSLLocation")?.Value)
-                                         .Where(url => !string.IsNullOrEmpty(url))
-                                         .ToList();
-
-                    if (tslUrls == null || !tslUrls.Any())
+                    if (!tslUrls.Any())
                     {
-                        // Deze fout zou nu opgelost moeten zijn.
-                        return "Update mislukt: geen links naar land-specifieke lijsten gevonden in de hoofdlijst (parser-fout).";
+                        return "Update mislukt: geen links naar landenlijsten gevonden in de hoofdlijst.";
                     }
 
                     var allCerts = new List<X509Certificate>();
+                    var allCrlUrls = new HashSet<string>();
                     var parser = new X509CertificateParser();
+                    int failedTslDownloads = 0;
 
+                    updateCallback($"Landenlijsten verwerken ({tslUrls.Count} totaal)...");
                     foreach (var url in tslUrls)
                     {
-                        // --- DE CRUCIALE VEILIGHEIDSCHECK ---
+                        // We verwerken alleen XML-bestanden
                         if (!url.EndsWith(".xml", StringComparison.OrdinalIgnoreCase))
                         {
-                            // Sla bestanden over die geen XML zijn (zoals PDFs)
                             continue;
                         }
 
                         string fileName = Path.GetFileName(new Uri(url).AbsolutePath);
                         if (string.IsNullOrEmpty(fileName))
                         {
-                            fileName = Guid.NewGuid().ToString() + ".xml";
+                            fileName = Guid.NewGuid() + ".xml";
                         }
+                        string tslFilePath = Path.Combine(tslXmlCacheFolder, fileName);
 
                         try
                         {
                             var tslXmlString = await httpClient.GetStringAsync(url);
-                            File.WriteAllText(Path.Combine(debugXmlFolder, fileName), tslXmlString);
+                            File.WriteAllText(tslFilePath, tslXmlString); // Sla het bestand permanent op voor inspectie
 
                             var tslXml = XDocument.Parse(tslXmlString);
-                            var base64Certs = tslXml.Descendants()
-                                                .Where(e => e.Name.LocalName == "X509Certificate")
-                                                .Select(c => c.Value.Trim());
 
-                            foreach (var base64Cert in base64Certs)
+                            // Parse certificaten uit de TSL
+                            var certNodes = tslXml.Descendants().Where(e => e.Name.LocalName == "X509Certificate");
+                            foreach (var certNode in certNodes)
                             {
-                                if (string.IsNullOrWhiteSpace(base64Cert)) continue;
-                                var certBytes = Convert.FromBase64String(base64Cert);
-                                var certsInStream = parser.ReadCertificates(new MemoryStream(certBytes));
-                                allCerts.AddRange(certsInStream.Cast<X509Certificate>());
+                                var certBytes = Convert.FromBase64String(certNode.Value.Trim());
+                                allCerts.AddRange(parser.ReadCertificates(new MemoryStream(certBytes)).Cast<X509Certificate>());
+                            }
+
+                            // Vind CRL URLs in de TSL
+                            // Zoek #1: De 'standaard' manier via URI-tags.
+                            var crlUris = tslXml.Descendants()
+                                                .Where(e => e.Name.LocalName == "URI")
+                                                .Select(uri => uri.Value.Trim());
+
+                            foreach (var crlUrl in crlUris)
+                            {
+                                if (crlUrl.EndsWith(".crl", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    allCrlUrls.Add(crlUrl);
+                                }
+                            }
+
+                            // Zoek #2: De manier die u heeft gevonden via ServiceSupplyPoint-tags.
+                            var serviceSupplyPoints = tslXml.Descendants()
+                                                            .Where(e => e.Name.LocalName == "ServiceSupplyPoint")
+                                                            .Select(ssp => ssp.Value.Trim());
+
+                            foreach (var crlUrl in serviceSupplyPoints)
+                            {
+                                if (crlUrl.EndsWith(".crl", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    allCrlUrls.Add(crlUrl);
+                                }
                             }
                         }
-                        catch (HttpRequestException netEx)
+                        catch
                         {
-                            File.WriteAllText(Path.Combine(debugXmlFolder, $"{fileName}.error.txt"), netEx.ToString());
-                        }
-                        catch (Exception parseEx)
-                        {
-                            // Vang ook parse-fouten op voor het geval een .xml-bestand corrupt is
-                            File.WriteAllText(Path.Combine(debugXmlFolder, $"{fileName}.parse-error.txt"), parseEx.ToString());
+                            failedTslDownloads++;
                         }
                     }
 
-                    if (allCerts.Any())
+                    if (!allCerts.Any())
                     {
-                        TrustedCertificates = allCerts.DistinctBy(c => c.GetHashCode()).ToList();
-                        LastUpdated = DateTime.UtcNow;
-                        SaveToCache();
-                        return $"EU Trust List succesvol bijgewerkt ({TrustedCertificates.Count} certificaten).";
+                        return "Update voltooid, maar geen certificaten gevonden in de gedownloade EU-lijsten.";
                     }
-                    return $"Update voltooid, maar geen certificaten gevonden in de EU-lijsten. Controleer de XML-bestanden in de Debug_XML map.";
+
+                    TrustedCertificates = allCerts.DistinctBy(c => c.GetHashCode()).ToList();
+
+                    var downloadedCrls = new Dictionary<string, byte[]>();
+                    int count = 0;
+                    foreach (var crlUrl in allCrlUrls)
+                    {
+                        count++;
+                        updateCallback($"Downloading CRLs ({count}/{allCrlUrls.Count})...");
+                        try
+                        {
+                            var crlBytes = await httpClient.GetByteArrayAsync(crlUrl);
+                            downloadedCrls[crlUrl] = crlBytes;
+                        }
+                        catch { /* Sla falende CRL downloads over */ }
+                    }
+                    CrlCache = downloadedCrls;
+                    LastUpdated = DateTime.UtcNow;
+                    SaveToCache();
+
+                    // Bouw de definitieve statusmelding
+                    string finalStatus = $"EU lijsten succesvol bijgewerkt ({TrustedCertificates.Count} certificaten, {CrlCache.Count} CRLs).";
+                    if (failedTslDownloads > 0)
+                    {
+                        finalStatus += $" Opmerking: {failedTslDownloads} van de {tslUrls.Count} landenlijst(en) konden niet worden geladen.";
+                    }
+                    return finalStatus;
                 }
             }
             catch (Exception ex)
             {
-                string errorLogPath = Path.Combine(debugXmlFolder, "FATAL_ERROR.txt");
-                File.WriteAllText(errorLogPath, ex.ToString());
-                return $"Een onverwachte fout is opgetreden: {ex.Message}. Controleer de log in {errorLogPath}";
+                return $"Update EU Trust List mislukt: {ex.Message}. De app gebruikt de versie uit de cache.";
             }
         }
 
         private void SaveToCache()
         {
-            var cacheData = new CacheData
+            var cacheData = new EutlCacheData
             {
                 LastUpdated = this.LastUpdated,
-                Base64Certificates = TrustedCertificates.Select(c => Convert.ToBase64String(c.GetEncoded())).ToList()
+                TrustedCertificatesB64 = TrustedCertificates.Select(c => Convert.ToBase64String(c.GetEncoded())).ToList(),
+                CrlsB64 = CrlCache.ToDictionary(kvp => kvp.Key, kvp => Convert.ToBase64String(kvp.Value))
             };
             var cacheJson = JsonSerializer.Serialize(cacheData);
             File.WriteAllText(_cacheFilePath, cacheJson);
-        }
-
-        private class CacheData
-        {
-            public DateTime LastUpdated { get; set; }
-            public List<string> Base64Certificates { get; set; }
         }
     }
 }
