@@ -22,10 +22,27 @@
             <Button Name="SelectPdfButton" DockPanel.Dock="Top" Content="Selecteer en Analyseer PDF" Height="40" FontSize="14" FontWeight="Bold" Click="SelectPdfButton_Click"/>
 
             <!-- 2. Statusbalk onderaan voor de Trust List -->
-            <StatusBar DockPanel.Dock="Bottom" Background="#F0F0F0">
+
+            <StatusBar DockPanel.Dock="Bottom" Background="#F0F0F0" MinHeight="40">
+                <StatusBar.ContextMenu>
+                    <ContextMenu>
+                        <MenuItem Header="Kopieer volledige log" Click="CopyLog_Click"/>
+                    </ContextMenu>
+                </StatusBar.ContextMenu>
+
                 <StatusBarItem>
-                    <TextBlock Name="TrustListStatusText" Text="EU Trust List: Nog niet geïmplementeerd." Foreground="Gray"/>
+                    <TextBlock Name="TrustListStatusText" 
+                   Text="EU Trust List: Initialiseren..." 
+                   Foreground="Gray"
+                   TextWrapping="Wrap">
+                        <TextBlock.ToolTip>
+                            <ToolTip Content="{Binding Path=Text, RelativeSource={RelativeSource AncestorType=TextBlock}}"/>
+                        </TextBlock.ToolTip>
+                    </TextBlock>
                 </StatusBarItem>
+
+                <!-- Een onzichtbare TextBox die we alleen gebruiken om de log te kunnen kopiëren -->
+                <TextBox Name="LogTextBox" Visibility="Collapsed"/>
             </StatusBar>
 
             <!-- 3. Resultaatpaneel (standaard onzichtbaar) -->
