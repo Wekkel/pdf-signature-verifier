@@ -12,6 +12,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Media;
 using static System.Net.Mime.MediaTypeNames;
 
@@ -25,11 +26,14 @@ namespace PdfSignatureVerifier.App
         public string Explanation { get; set; }
         public SolidColorBrush Color { get; set; }
         public string SignerInfo { get; set; } = string.Empty;
+        
     }
 
     public partial class MainWindow : Window
     {
         private readonly EutlService _eutlService;
+        private List<SignatureInfo> _allSignatures;
+        private string _currentFilePath;
 
         public MainWindow()
         {
@@ -92,11 +96,13 @@ namespace PdfSignatureVerifier.App
             }
         }
 
-        // VOEG DEZE NIEUWE, CENTRALE METHODE TOE:
         private void StartAnalysis(string filePath)
         {
+
+            _currentFilePath = filePath; // remember the real path
+
             // 1. Reset de UI naar een 'Laden' staat.
-            ResultPanel.Visibility = Visibility.Collapsed; // Verberg het oude resultaat volledig
+            ResultPanel.Visibility = Visibility.Collapsed; 
             SelectPdfButton.IsEnabled = false;
             SelectPdfButton.Content = "Analyse Bezig...";
 
@@ -106,20 +112,38 @@ namespace PdfSignatureVerifier.App
                 PdfWebView.Source = new Uri($"file:///{filePath}");
             }
 
-            // Forceer de UI om zichzelf onmiddellijk bij te werken
-            this.Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.Background);
+            Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.Background);
 
-            // 2. Voer de analyse uit.
-            AnalysisResult result = PerformAnalysis(filePath);
+            // Analyseer ALLE handtekeningen
+            _allSignatures = AnalyzeAllSignatures(filePath);
 
-            // 3. Toon de nieuwe resultaten.
-            UpdateUIWithResult(result, filePath);
+            if (_allSignatures.Any())
+            {
+                // Toon de lijst met handtekeningen
+                SignatureListPanel.Visibility = Visibility.Visible;
+                SignatureListBox.ItemsSource = _allSignatures;
 
-            // 4. Herstel de knop
+                // Selecteer automatisch de eerste handtekening
+                SignatureListBox.SelectedIndex = 0;
+            }
+            else
+            {
+                // Geen handtekeningen gevonden
+                SignatureListPanel.Visibility = Visibility.Collapsed;
+                var noSigResult = new AnalysisResult
+                {
+                    Level = AnalysisResult.SignatureLevel.SES,
+                    Title = "Geen Cryptografische Handtekening",
+                    Color = new SolidColorBrush(Colors.Orange),
+                    Explanation = "Dit document bevat geen cryptografische handtekeningen..."
+                };
+                UpdateUIWithResult(noSigResult, filePath);
+            }
             SelectPdfButton.IsEnabled = true;
             SelectPdfButton.Content = "Selecteer en Analyseer PDF";
         }
 
+        
         private AnalysisResult PerformAnalysis(string filePath)
         {
             try
@@ -243,6 +267,181 @@ namespace PdfSignatureVerifier.App
             }
         }
 
+        private AnalysisResult AnalyzeSingleSignature(PdfPKCS7 pkcs7, SignatureUtil signatureUtil, string signatureName, string signerName)
+{
+    try
+    {
+        IX509Certificate signingCert = pkcs7.GetSigningCertificate();
+        bool isValid = pkcs7.VerifySignatureIntegrityAndAuthenticity();
+
+        if (isValid)
+        {
+            bool isQES = IsCertificateChainQualified(pkcs7);
+            if (isQES)
+            {
+                return new AnalysisResult
+                {
+                    Level = AnalysisResult.SignatureLevel.QES,
+                    Title = "Gekwalificeerde Handtekening (QES)",
+                    Color = new SolidColorBrush(Colors.LightGreen),
+                    SignerInfo = $"Ondertekend door: {signerName}",
+                    Explanation = "Deze handtekening is cryptografisch geldig én is geverifieerd tegen de officiële EU Trust List. Dit is een Gekwalificeerde Elektronische Handtekening (QES).\n\n" +
+                                  "Wat betekent dit?\n" +
+                                  "Een QES heeft dezelfde juridische status als een handgeschreven handtekening in de hele Europese Unie. Het biedt het hoogste niveau van zekerheid."
+                };
+            }
+            else
+            {
+                // Het is een AES. Nu voegen we de waarschuwing toe als de EUTL leeg is.
+                string eutlWarning = string.Empty;
+                if (!_eutlService.TrustedCertificates.Any())
+                {
+                    eutlWarning = "\n\nWAARSCHUWING: De EU Trust List kon niet worden geladen. Deze handtekening kon daarom niet op QES-status worden gecontroleerd en wordt als AES weergegeven.";
+                }
+
+                return new AnalysisResult
+                {
+                    Level = AnalysisResult.SignatureLevel.AES,
+                    Title = "Geavanceerde Handtekening (AES)",
+                    Color = new SolidColorBrush(Colors.DodgerBlue),
+                    SignerInfo = $"Ondertekend door: {signerName}",
+                    Explanation = "Het document bevat een cryptografisch geldige handtekening. Dit wordt geclassificeerd als een Geavanceerde Elektronische Handtekening (AES).\n\n" +
+                                  "Wat betekent dit?\n" +
+                                  "De handtekening is geldig en het document is niet gewijzigd na ondertekening. Deze handtekening is echter niet geverifieerd tegen de EU Trust List en telt daarom niet als 'Gekwalificeerd'." +
+                                  eutlWarning
+                };
+            }
+        }
+        else
+        {
+            // De handtekening is cryptografisch ongeldig. Laten we de redenen verzamelen.
+            var issues = new List<string>();
+
+            // Detail 1: Controleer de geldigheid van het certificaat op de datum van ondertekening.
+            try
+            {
+                var parser = new X509CertificateParser();
+                var bouncyCastleCert = parser.ReadCertificate(signingCert.GetEncoded());
+                bouncyCastleCert.CheckValidity(pkcs7.GetSignDate());
+            }
+            catch (Exception certEx)
+            {
+                issues.Add($"Het gebruikte certificaat was ongeldig op het moment van ondertekenen. Reden: {certEx.Message}");
+            }
+
+            // Detail 2: Controleer of de handtekening het hele document dekt.
+            if (!signatureUtil.SignatureCoversWholeDocument(signatureName))
+            {
+                issues.Add("De handtekening dekt niet het volledige document. Dit kan betekenen dat er later niet-ondertekende content is toegevoegd.");
+            }
+
+            // Detail 3: Als de bovenstaande checks geen fout geven, is de integriteit zelf het probleem.
+            if (!issues.Any())
+            {
+                issues.Add("De cryptografische integriteit van de handtekening is verbroken. Dit duidt er meestal op dat het document is gewijzigd NADAT de handtekening is geplaatst.");
+            }
+
+            return new AnalysisResult
+            {
+                Level = AnalysisResult.SignatureLevel.SES,
+                Title = "ONGELDIGE Handtekening Gevonden",
+                Color = new SolidColorBrush(Colors.Red),
+                SignerInfo = $"Ondertekenaar (volgens certificaat): {signerName}",
+                Explanation = "Er is een cryptografische handtekening gevonden, maar deze is ONGELDIG. De integriteit van het document is niet gegarandeerd.\n\n" +
+                              $"Gevonden Problemen:\n- {string.Join("\n- ", issues)}"
+            };
+        }
+    }
+    catch (Exception ex)
+    {
+        return new AnalysisResult
+        {
+            Level = AnalysisResult.SignatureLevel.SES,
+            Title = "Fout bij Analyse",
+            Color = new SolidColorBrush(Colors.DarkRed),
+            Explanation = $"Er is een fout opgetreden tijdens de analyse van deze handtekening: {ex.Message}"
+        };
+    }
+}
+
+        private List<SignatureInfo> AnalyzeAllSignatures(string filePath)
+        {
+            var signatures = new List<SignatureInfo>();
+
+            try
+            {
+                using (var pdfReader = new PdfReader(filePath))
+                using (var pdfDoc = new PdfDocument(pdfReader))
+                {
+                    var signatureUtil = new SignatureUtil(pdfDoc);
+                    var signatureNames = signatureUtil.GetSignatureNames();
+
+                    int index = 1;
+                    foreach (var name in signatureNames)
+                    {
+                        var sigInfo = new SignatureInfo
+                        {
+                            Index = index++,
+                            SignatureName = name
+                        };
+
+                        try
+                        {
+                            PdfPKCS7 pkcs7 = signatureUtil.ReadSignatureData(name);
+                            IX509Certificate signingCert = pkcs7.GetSigningCertificate();
+
+                            sigInfo.SignerName = CertificateInfo.GetSubjectFields(signingCert)?.GetField("CN") ?? "Onbekend";
+                            sigInfo.SignDate = pkcs7.GetSignDate().ToString("dd-MM-yyyy HH:mm");
+
+                            // Voer volledige analyse uit voor deze handtekening
+                            sigInfo.FullAnalysis = AnalyzeSingleSignature(pkcs7, signatureUtil, name, sigInfo.SignerName);
+
+                            // Bepaal de status voor de lijst
+                            sigInfo.Status = sigInfo.FullAnalysis.Level switch
+                            {
+                                AnalysisResult.SignatureLevel.QES => "QES ✓",
+                                AnalysisResult.SignatureLevel.AES => "AES ✓",
+                                _ => sigInfo.FullAnalysis.Title.Contains("ONGELDIG") ? "Ongeldig ✗" : "SES"
+                            };
+                        }
+                        catch (Exception ex)
+                        {
+                            sigInfo.SignerName = "Fout bij lezen";
+                            sigInfo.Status = "Onleesbaar";
+                            sigInfo.FullAnalysis = new AnalysisResult
+                            {
+                                Title = "Fout bij Analyse",
+                                Color = new SolidColorBrush(Colors.DarkRed),
+                                Explanation = $"Kon handtekening niet lezen: {ex.Message}"
+                            };
+                        }
+
+                        signatures.Add(sigInfo);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                // Fout bij openen PDF
+            }
+
+            return signatures;
+        }
+
+        private void SignatureListBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (SignatureListBox.SelectedItem is SignatureInfo selected)
+            {
+                // Use the REAL file path for the viewer
+                UpdateUIWithResult(selected.FullAnalysis, _currentFilePath);
+
+                // If you still want to show which signature is selected, update a separate label:
+                ResultFilename.Text =
+                    $"Bestand: {System.IO.Path.GetFileName(_currentFilePath)}\n" +
+                    $"Handtekening {selected.Index}: {selected.SignerName}\n" +
+                    $"{selected.FullAnalysis.SignerInfo}";
+            }
+        }
 
         private bool IsCertificateChainQualified(PdfPKCS7 pkcs7)
         {
@@ -303,10 +502,13 @@ namespace PdfSignatureVerifier.App
             ResultPanel.BorderBrush = result.Color;
             ResultTitle.Text = result.Title;
             ResultTitle.Foreground = result.Color;
-            ResultFilename.Text = $"Bestand: {Path.GetFileName(filePath)}\n{result.SignerInfo}";
+            // Keep showing the actual file name here
+            ResultFilename.Text = $"Bestand: {System.IO.Path.GetFileName(filePath)}\n{result.SignerInfo}";
             ResultExplanation.Text = result.Explanation;
             ResultPanel.Visibility = Visibility.Visible;
-            PdfWebView.Source = new Uri($"file:///{filePath}");
+
+            // Always navigate using the REAL path
+            PdfWebView.Source = new Uri(new Uri(filePath).AbsoluteUri);
         }
 
         private void CopyLog_Click(object sender, RoutedEventArgs e)
