@@ -83,9 +83,35 @@ namespace PdfSignatureVerifier.App
         private void SelectPdfButton_Click(object sender, RoutedEventArgs e)
         {
             var openFileDialog = new OpenFileDialog { Filter = "PDF Files|*.pdf", Title = "Selecteer een PDF-bestand" };
-            if (openFileDialog.ShowDialog() != true) return;
-            var result = PerformAnalysis(openFileDialog.FileName);
-            UpdateUIWithResult(result, openFileDialog.FileName);
+
+            if (openFileDialog.ShowDialog() != true)
+            {
+                return;
+            }
+
+            // 1. Sla het pad op
+            string filePath = openFileDialog.FileName;
+
+            // 2. Reset de UI naar een 'Laden' staat
+            ResultPanel.Visibility = Visibility.Collapsed;
+            SelectPdfButton.IsEnabled = false;
+            SelectPdfButton.Content = "Analyse Bezig...";
+
+            // Laad de PDF alvast in de viewer
+            PdfWebView.Source = new Uri($"file:///{filePath}");
+
+            // Forceer de UI om zichzelf onmiddellijk bij te werken
+            this.Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.Background);
+
+            // 3. Voer de analyse uit
+            AnalysisResult result = PerformAnalysis(filePath);
+
+            // 4. Toon de nieuwe resultaten
+            UpdateUIWithResult(result, filePath);
+
+            // 5. Herstel de knop
+            SelectPdfButton.IsEnabled = true;
+            SelectPdfButton.Content = "Selecteer en Analyseer PDF";
         }
 
         private AnalysisResult PerformAnalysis(string filePath)
@@ -100,7 +126,15 @@ namespace PdfSignatureVerifier.App
 
                     if (!signatureNames.Any())
                     {
-                        return new AnalysisResult { /* ... uw SES-tekst ... */ };
+                        return new AnalysisResult
+                        {
+                            Level = AnalysisResult.SignatureLevel.SES,
+                            Title = "Geen Cryptografische Handtekening",
+                            Color = new SolidColorBrush(Colors.Orange),
+                            Explanation = "Dit programma heeft geen cryptografisch geldige handtekening (AES of QES) gevonden.\n\n" +
+                     "Wat betekent dit?\n" +
+                     "De PDF kan een Standaard Elektronische Handtekening (SES) bevatten, zoals een scan van een 'natte' handtekening. Dit programma kan de geldigheid hiervan niet controleren. U dient dit visueel te beoordelen."
+                        };
                     }
 
                     var name = signatureNames.First();
@@ -147,19 +181,44 @@ namespace PdfSignatureVerifier.App
                             };
                         }
                     }
+                    // GEREPAREERDE BLOK
                     else
                     {
-                        // De logica voor ongeldige handtekeningen...
-                        // ... (deze code blijft hetzelfde als in het vorige, werkende antwoord)
+                        // De handtekening is cryptografisch ongeldig. Laten we de redenen verzamelen.
                         var issues = new List<string>();
-                        // ... etc. ...
+
+                        // Detail 1: Controleer de geldigheid van het certificaat op de datum van ondertekening.
+                        try
+                        {
+                            var parser = new X509CertificateParser();
+                            var bouncyCastleCert = parser.ReadCertificate(signingCert.GetEncoded());
+                            // Laat BouncyCastle de datums controleren.
+                            bouncyCastleCert.CheckValidity(pkcs7.GetSignDate());
+                        }
+                        catch (Exception certEx)
+                        {
+                            issues.Add($"Het gebruikte certificaat was ongeldig op het moment van ondertekenen. Reden: {certEx.Message}");
+                        }
+
+                        // Detail 2: Controleer of de handtekening het hele document dekt.
+                        if (!signatureUtil.SignatureCoversWholeDocument(name))
+                        {
+                            issues.Add("De handtekening dekt niet het volledige document. Dit kan betekenen dat er later niet-ondertekende content is toegevoegd.");
+                        }
+
+                        // Detail 3: Als de bovenstaande checks geen fout geven, is de integriteit zelf het probleem.
+                        if (!issues.Any())
+                        {
+                            issues.Add("De cryptografische integriteit van de handtekening is verbroken. Dit duidt er meestal op dat het document is gewijzigd NADAT de handtekening is geplaatst.");
+                        }
+
                         return new AnalysisResult
                         {
                             Level = AnalysisResult.SignatureLevel.SES,
                             Title = "ONGELDIGE Handtekening Gevonden",
                             Color = new SolidColorBrush(Colors.Red),
                             SignerInfo = $"Ondertekenaar (volgens certificaat): {signerName}",
-                            Explanation = $"Er is een cryptografische handtekening gevonden, maar deze is ONGELDIG...\n\n" +
+                            Explanation = "Er is een cryptografische handtekening gevonden, maar deze is ONGELDIG. De integriteit van het document is niet gegarandeerd.\n\n" +
                                           $"Gevonden Problemen:\n- {string.Join("\n- ", issues)}"
                         };
                     }
