@@ -80,36 +80,42 @@ namespace PdfSignatureVerifier.App
             SelectPdfButton.Content = "Selecteer en Analyseer PDF";
         }
 
+        // VERVANG UW BESTAANDE KNOP-METHODE:
         private void SelectPdfButton_Click(object sender, RoutedEventArgs e)
         {
             var openFileDialog = new OpenFileDialog { Filter = "PDF Files|*.pdf", Title = "Selecteer een PDF-bestand" };
 
-            if (openFileDialog.ShowDialog() != true)
+            if (openFileDialog.ShowDialog() == true)
             {
-                return;
+                // Roep de centrale analysemethode aan
+                StartAnalysis(openFileDialog.FileName);
             }
+        }
 
-            // 1. Sla het pad op
-            string filePath = openFileDialog.FileName;
-
-            // 2. Reset de UI naar een 'Laden' staat
-            ResultPanel.Visibility = Visibility.Collapsed;
+        // VOEG DEZE NIEUWE, CENTRALE METHODE TOE:
+        private void StartAnalysis(string filePath)
+        {
+            // 1. Reset de UI naar een 'Laden' staat.
+            ResultPanel.Visibility = Visibility.Collapsed; // Verberg het oude resultaat volledig
             SelectPdfButton.IsEnabled = false;
             SelectPdfButton.Content = "Analyse Bezig...";
 
             // Laad de PDF alvast in de viewer
-            PdfWebView.Source = new Uri($"file:///{filePath}");
+            if (File.Exists(filePath))
+            {
+                PdfWebView.Source = new Uri($"file:///{filePath}");
+            }
 
             // Forceer de UI om zichzelf onmiddellijk bij te werken
             this.Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.Background);
 
-            // 3. Voer de analyse uit
+            // 2. Voer de analyse uit.
             AnalysisResult result = PerformAnalysis(filePath);
 
-            // 4. Toon de nieuwe resultaten
+            // 3. Toon de nieuwe resultaten.
             UpdateUIWithResult(result, filePath);
 
-            // 5. Herstel de knop
+            // 4. Herstel de knop
             SelectPdfButton.IsEnabled = true;
             SelectPdfButton.Content = "Selecteer en Analyseer PDF";
         }
@@ -226,7 +232,14 @@ namespace PdfSignatureVerifier.App
             }
             catch (Exception ex)
             {
-                return new AnalysisResult { /* ... uw foutafhandeling ... */ };
+                return new AnalysisResult 
+                { 
+                    Level = AnalysisResult.SignatureLevel.SES, // Of een ander niveau, afhankelijk van hoe je dit wilt classificeren
+                    Title = "Fout bij Analyse", 
+                    Color = new SolidColorBrush(Colors.DarkRed), // Een duidelijke foutkleur
+                    Explanation = $"Er is een onverwachte fout opgetreden tijdens de analyse van de PDF: {ex.Message}\n" +
+                                  "Controleer of het bestand een geldige PDF is en niet beschadigd."
+                };
             }
         }
 
@@ -299,6 +312,61 @@ namespace PdfSignatureVerifier.App
         private void CopyLog_Click(object sender, RoutedEventArgs e)
         {
             Clipboard.SetText(LogTextBox.Text);
+        }
+
+
+        // NIEUW TOE TE VOEGEN BLOK: Event handlers voor drag-and-drop op het linkerpaneel
+        private void LeftPanelDropTarget_DragEnter(object sender, DragEventArgs e)
+        {
+            // Zorg dat de LeftPanelDropTarget zichtbaar wordt (als vangnet)
+            LeftPanelDropTarget.Visibility = Visibility.Visible;
+            e.Effects = DragDropEffects.None; // Start met 'verboden' cursor
+            e.Handled = true;
+        }
+
+        private void LeftPanelDropTarget_DragOver(object sender, DragEventArgs e)
+        {
+            bool isPdf = e.Data.GetDataPresent(DataFormats.FileDrop) &&
+                         ((string[])e.Data.GetData(DataFormats.FileDrop))
+                         .Any(f => f.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase));
+
+            if (isPdf)
+            {
+                e.Effects = DragDropEffects.Copy;
+                DragDropOverlay.Visibility = Visibility.Visible; // Toon de blauwe overlay
+            }
+            else
+            {
+                e.Effects = DragDropEffects.None;
+                DragDropOverlay.Visibility = Visibility.Collapsed; // Verberg de overlay als het geen PDF is
+            }
+            e.Handled = true;
+        }
+
+        private void LeftPanelDropTarget_DragLeave(object sender, DragEventArgs e)
+        {
+            // Verberg zowel de overlay als het vangnet
+            DragDropOverlay.Visibility = Visibility.Collapsed;
+            LeftPanelDropTarget.Visibility = Visibility.Collapsed;
+            e.Handled = true;
+        }
+
+        private void LeftPanelDropTarget_Drop(object sender, DragEventArgs e)
+        {
+            // Verberg zowel de overlay als het vangnet
+            DragDropOverlay.Visibility = Visibility.Collapsed;
+            LeftPanelDropTarget.Visibility = Visibility.Collapsed;
+
+            if (e.Data.GetDataPresent(DataFormats.FileDrop))
+            {
+                var files = (string[])e.Data.GetData(DataFormats.FileDrop);
+                var pdfFile = files.FirstOrDefault(f => f.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase));
+                if (pdfFile != null)
+                {
+                    StartAnalysis(pdfFile);
+                }
+            }
+            e.Handled = true;
         }
     }
 }

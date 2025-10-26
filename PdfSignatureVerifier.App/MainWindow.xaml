@@ -7,62 +7,108 @@
         mc:Ignorable="d"
         Title="Standalone PDF Signature Verifier" Height="700" Width="1200" WindowStartupLocation="CenterScreen">
 
-    <!-- Hoofdlayout: een Grid met 2 kolommen -->
+    <!-- Hoofdlayout: een Grid met 2 kolommen. -->
     <Grid Margin="10">
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="400"/>
-            <!-- Vaste breedte voor de resultaten -->
             <ColumnDefinition Width="*"/>
-            <!-- De rest van de ruimte voor de PDF -->
         </Grid.ColumnDefinitions>
 
         <!-- Linker kolom: Bediening en Resultaten -->
-        <DockPanel Grid.Column="0" Margin="0,0,10,0">
+        <DockPanel Grid.Column="0"
+                   Margin="0,0,10,0"
+                   AllowDrop="True"
+           DragEnter="LeftPanelDropTarget_DragEnter"
+           DragOver="LeftPanelDropTarget_DragOver"
+           DragLeave="LeftPanelDropTarget_DragLeave"
+           Drop="LeftPanelDropTarget_Drop">
             <!-- 1. Knop bovenaan om een PDF te selecteren -->
-            <Button Name="SelectPdfButton" DockPanel.Dock="Top" Content="Selecteer en Analyseer PDF" Height="40" FontSize="14" FontWeight="Bold" Click="SelectPdfButton_Click"/>
+            <Button Name="SelectPdfButton" DockPanel.Dock="Top" Height="50" FontSize="14" FontWeight="Bold" Click="SelectPdfButton_Click">
+                <TextBlock TextAlignment="Center">
+                    Selecteer en Analyseer PDF
+                    <LineBreak/>  <!-- Nieuwe regel -->
+                    of drag and drop de PDF hieronder <!-- Aangepaste tekst -->
+                </TextBlock>
+            </Button>
 
             <!-- 2. Statusbalk onderaan voor de Trust List -->
-
             <StatusBar DockPanel.Dock="Bottom" Background="#F0F0F0" MinHeight="40">
                 <StatusBar.ContextMenu>
                     <ContextMenu>
                         <MenuItem Header="Kopieer volledige log" Click="CopyLog_Click"/>
                     </ContextMenu>
                 </StatusBar.ContextMenu>
-
                 <StatusBarItem>
                     <TextBlock Name="TrustListStatusText" 
-                   Text="EU Trust List: Initialiseren..." 
-                   Foreground="Gray"
-                   TextWrapping="Wrap">
+                               Text="EU Trust List: Initialiseren..." 
+                               Foreground="Gray"
+                               TextWrapping="Wrap">
                         <TextBlock.ToolTip>
                             <ToolTip Content="{Binding Path=Text, RelativeSource={RelativeSource AncestorType=TextBlock}}"/>
                         </TextBlock.ToolTip>
                     </TextBlock>
                 </StatusBarItem>
-
-                <!-- Een onzichtbare TextBox die we alleen gebruiken om de log te kunnen kopiëren -->
                 <TextBox Name="LogTextBox" Visibility="Collapsed"/>
             </StatusBar>
 
-            <!-- 3. Resultaatpaneel (standaard onzichtbaar) -->
-            <Border Name="ResultPanel" BorderThickness="2" CornerRadius="5" Padding="15" Margin="0,10,0,0" Visibility="Collapsed">
+            <!-- 3. Resultaatpaneel -->
+            <Border Name="ResultPanel" BorderThickness="2" CornerRadius="5" Padding="15" Margin="0,10,0,0" Visibility="Collapsed"
+                    AllowDrop="True"
+        DragEnter="LeftPanelDropTarget_DragEnter"
+        DragOver="LeftPanelDropTarget_DragOver"
+        DragLeave="LeftPanelDropTarget_DragLeave"
+        Drop="LeftPanelDropTarget_Drop">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel>
                         <TextBlock Name="ResultTitle" FontSize="22" FontWeight="Bold" Text="Analyse Resultaat" TextWrapping="Wrap"/>
                         <TextBlock Name="ResultFilename" TextWrapping="Wrap" Margin="0,10,0,0" Foreground="Gray"/>
-
                         <Separator Margin="0,15,0,15"/>
-
                         <TextBlock Name="ResultExplanation" FontSize="14" TextWrapping="Wrap" LineHeight="20"/>
                     </StackPanel>
                 </ScrollViewer>
             </Border>
         </DockPanel>
 
+        <!-- NIEUW TOEGEVOEGD: Het onzichtbare vangnet voor de drag-and-drop zone op het linkerpaneel -->
+        <!-- Dit vangt de drag-events op voordat de overlay getoond wordt -->
+        <Border Name="LeftPanelDropTarget"
+                Grid.Column="0"  
+                Background="Transparent"
+                AllowDrop="True"  
+                DragEnter="LeftPanelDropTarget_DragEnter"
+                DragOver="LeftPanelDropTarget_DragOver"
+                DragLeave="LeftPanelDropTarget_DragLeave"
+                Drop="LeftPanelDropTarget_Drop"
+                Visibility="Collapsed"  
+                Panel.ZIndex="50" />
+
         <!-- Rechter kolom: PDF Viewer -->
         <Border Grid.Column="1" BorderThickness="1" BorderBrush="LightGray">
+            <!-- AllowDrop is hier terug naar de standaardwaarde (True), 
+                 omdat WebView2 zijn eigen drag/drop gedrag mag behouden -->
             <wv2:WebView2 Name="PdfWebView" />
         </Border>
+
+
+        <!-- De ZICHTBARE overlay die we aan/uit zetten, nu alleen over de linkerkolom -->
+        <Border Name="DragDropOverlay" 
+                Grid.Column="0" 
+            Background="#AAFFFFFF" 
+                BorderBrush="DodgerBlue" 
+                BorderThickness="4" 
+                CornerRadius="10"
+                Panel.ZIndex="100"
+           
+            IsHitTestVisible="False" 
+                Visibility="Collapsed">
+            <TextBlock Text="Laat het PDF-bestand hier los om te analyseren"
+                       HorizontalAlignment="Center"
+                       VerticalAlignment="Center"
+                       FontSize="24"
+                       FontWeight="Bold"
+                       Foreground="DodgerBlue"
+                       TextWrapping="Wrap"/>
+        </Border>
+
     </Grid>
 </Window>
