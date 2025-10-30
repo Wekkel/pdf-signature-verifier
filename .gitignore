@@ -1,17 +1,64 @@
-# Virtual Environment (van het oude Python project)
+# === Python (oude project) - behoud je oude regels ===
 venv/
-
-# Python cache
 __pycache__/
 *.pyc
-
-# Build artifacts
 dist/
 build/
 *.spec
-
-# PyHanko cache
 .pyhanko_data/
 
-# Visual Studio temporary files
+# === Visual Studio & .NET Core / .NET 8 ===
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.cache
+*.tmp
+*.log
+
+# Build folders
+bin/
+obj/
+
+# NuGet & MSBuild cache
+packages/
+*.nupkg
+project.assets.json
+project.nuget.cache
+*.nuget.*
+
+# Generated files
+*.g.cs
+*.g.i.cs
+*.AssemblyInfo.cs
+*.AssemblyInfoInputs.cache
+*.GeneratedMSBuildEditorConfig.editorconfig
+*.assets.cache
+*.sourcelink.json
+*.BuildWithSkipAnalyzers
+
+# Visual Studio folders
 .vs/
+.vscode/
+.idea/
+
+# Debug/Release folders
+[Dd]ebug/
+[Dd]ebugPublic/
+[Rr]elease/
+[Rr]eleases/
+x64/
+x86/
+bld/
+
+# === WebView2 (Edge browser runtime cache) - SPECIFIEK VOOR JOUW PROJECT ===
+PdfSignatureVerifier.App.exe.WebView2/
+
+# === Optioneel: als je ook testprojecten hebt ===
+[Tt]est[Rr]esults/
+*.testlog
+
+# === macOS / Linux ===
+.DS_Store
+*.swp
+*~
