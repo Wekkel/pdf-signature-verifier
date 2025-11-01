@@ -1,5 +1,4 @@
-﻿using iText.Commons.Bouncycastle.Cert; // iText's interne BouncyCastle interface
-// Correcte 'using' statements voor de geïnstalleerde bibliotheken
+﻿using iText.Commons.Bouncycastle.Cert;
 using iText.Kernel.Pdf;
 using iText.Layout.Element;
 using iText.Signatures;
@@ -12,12 +11,14 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Runtime.InteropServices.ComTypes;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Media;
-using static System.Net.Mime.MediaTypeNames;
-
+using ComTypes = System.Runtime.InteropServices.ComTypes;
 
 namespace PdfSignatureVerifier.App
 {
@@ -29,14 +30,66 @@ namespace PdfSignatureVerifier.App
         public string Explanation { get; set; }
         public SolidColorBrush Color { get; set; }
         public string SignerInfo { get; set; } = string.Empty;
-
         public string TimestampInfo { get; set; } = string.Empty;
         public bool HasQualifiedTimestamp { get; set; } = false;
-
     }
 
     public partial class MainWindow : Window
     {
+        #region COM Structures and Interfaces for Email Attachments
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct FILEDESCRIPTOR
+        {
+            public uint dwFlags;
+            public Guid clsid;
+            public System.Drawing.Size sizel;
+            public System.Drawing.Point pointl;
+            public uint dwFileAttributes;
+            public ComTypes.FILETIME ftCreationTime;
+            public ComTypes.FILETIME ftLastAccessTime;
+            public ComTypes.FILETIME ftLastWriteTime;
+            public uint nFileSizeHigh;
+            public uint nFileSizeLow;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+            public string cFileName;
+        }
+
+        [ComImport]
+        [Guid("0000000C-0000-0000-C000-000000000046")]
+        [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        private interface IStream
+        {
+            void Read([Out, MarshalAs(UnmanagedType.LPArray, SizeParamIndex = 1)] byte[] pv, int cb, IntPtr pcbRead);
+            void Write([MarshalAs(UnmanagedType.LPArray, SizeParamIndex = 1)] byte[] pv, int cb, IntPtr pcbWritten);
+            void Seek(long dlibMove, int dwOrigin, IntPtr plibNewPosition);
+            void SetSize(long libNewSize);
+            void CopyTo(IStream pstm, long cb, IntPtr pcbRead, IntPtr pcbWritten);
+            void Commit(int grfCommitFlags);
+            void Revert();
+            void LockRegion(long libOffset, long cb, int dwLockType);
+            void UnlockRegion(long libOffset, long cb, int dwLockType);
+            void Stat(out ComTypes.STATSTG pstatstg, int grfStatFlag);
+            void Clone(out IStream ppstm);
+        }
+
+        [DllImport("ole32.dll")]
+        private static extern void ReleaseStgMedium(ref ComTypes.STGMEDIUM pmedium);
+
+        [DllImport("kernel32.dll")]
+        private static extern IntPtr GlobalLock(IntPtr hMem);
+
+        [DllImport("kernel32.dll")]
+        private static extern bool GlobalUnlock(IntPtr hMem);
+
+        [DllImport("kernel32.dll")]
+        private static extern int GlobalSize(IntPtr hMem);
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto)]
+        private static extern ushort RegisterClipboardFormat(string lpszFormat);
+
+        #endregion
+
         private readonly EutlService _eutlService;
         private List<SignatureInfo> _allSignatures;
         private string _currentFilePath;
@@ -48,11 +101,10 @@ namespace PdfSignatureVerifier.App
             InitializeBackendAsync();
         }
 
-
         private void AboutMenuItem_Click(object sender, RoutedEventArgs e)
         {
             AboutWindow aboutWindow = new AboutWindow();
-            aboutWindow.ShowDialog(); // ShowDialog blokkeert de interactie met het hoofdvenster totdat de About-box is gesloten
+            aboutWindow.ShowDialog();
         }
 
         private async void InitializeBackendAsync()
@@ -68,7 +120,6 @@ namespace PdfSignatureVerifier.App
                 LogTextBox.Text = text;
             }
 
-            // Step 1: Load from cache
             string initialStatus = _eutlService.LoadFromCache();
             UpdateLog(initialStatus);
 
@@ -76,7 +127,6 @@ namespace PdfSignatureVerifier.App
             bool isCacheMissing = !_eutlService.TrustedCertificates.Any();
             bool isCacheOld = (DateTime.UtcNow - _eutlService.LastUpdated) > cacheMaxAge;
 
-            // Step 2: Update trust list AND CRLs if needed
             if (isCacheMissing || isCacheOld)
             {
                 string reason = isCacheMissing ? "Geen cache gevonden" : "Cache is verouderd";
@@ -87,28 +137,23 @@ namespace PdfSignatureVerifier.App
 
                 UpdateLog(updateStatus);
             }
-            // Step 3: NEW - Check if only the hash needs updating
             else if (_eutlService.HashNeedsUpdate(cacheMaxAge))
             {
                 UpdateLog(LogTextBox.Text + " Hash is verouderd, opnieuw bouwen...");
                 SetButtonMainText("Hash Bouwen...", false);
 
-                // Rebuild hash from cached CRLs (fast, no download needed)
                 await Task.Run(() => _eutlService.RebuildHashFromCache());
 
                 UpdateLog($"EU lijsten geladen uit cache ({_eutlService.TrustedCertificates.Count} certs, {_eutlService.RevokedSerialNumbers.Count} ingetrokken serienummers). Hash bijgewerkt op {_eutlService.HashLastUpdated:dd-MM-yyyy HH:mm} UTC.");
             }
             else
             {
-                // Both cache and hash are fresh
                 UpdateLog($"EU lijsten geladen uit cache ({_eutlService.TrustedCertificates.Count} certs, {_eutlService.RevokedSerialNumbers.Count} ingetrokken serienummers). Laatst bijgewerkt: {_eutlService.LastUpdated:dd-MM-yyyy HH:mm} UTC.");
             }
 
-            // Stap 4: Herstel de knop naar zijn normale staat
             SelectPdfButton.IsEnabled = true;
             SetButtonMainText("Selecteer en Analyseer PDF", true);
         }
-
 
         private void SelectPdfButton_Click(object sender, RoutedEventArgs e)
         {
@@ -116,22 +161,18 @@ namespace PdfSignatureVerifier.App
 
             if (openFileDialog.ShowDialog() == true)
             {
-                // Roep de centrale analysemethode aan
                 StartAnalysis(openFileDialog.FileName);
             }
         }
 
         private void StartAnalysis(string filePath)
         {
+            _currentFilePath = filePath;
 
-            _currentFilePath = filePath; // remember the real path
-
-            // 1. Reset de UI naar een 'Laden' staat.
-            ResultPanel.Visibility = Visibility.Collapsed; 
+            ResultPanel.Visibility = Visibility.Collapsed;
             SelectPdfButton.IsEnabled = false;
             SetButtonMainText("Analyse Bezig...", false);
 
-            // Laad de PDF alvast in de viewer
             if (File.Exists(filePath))
             {
                 PdfWebView.Source = new Uri($"file:///{filePath}");
@@ -139,21 +180,16 @@ namespace PdfSignatureVerifier.App
 
             Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.Background);
 
-            // Analyseer ALLE handtekeningen
             _allSignatures = AnalyzeAllSignatures(filePath);
 
             if (_allSignatures.Any())
             {
-                // Toon de lijst met handtekeningen
                 SignatureListPanel.Visibility = Visibility.Visible;
                 SignatureListBox.ItemsSource = _allSignatures;
-
-                // Selecteer automatisch de eerste handtekening
                 SignatureListBox.SelectedIndex = 0;
             }
             else
             {
-                // Geen handtekeningen gevonden
                 SignatureListPanel.Visibility = Visibility.Collapsed;
                 var noSigResult = new AnalysisResult
                 {
@@ -168,244 +204,113 @@ namespace PdfSignatureVerifier.App
             SetButtonMainText("Selecteer en Analyseer PDF", true);
         }
 
-        
-        private AnalysisResult PerformAnalysis(string filePath)
+        private AnalysisResult AnalyzeSingleSignature(PdfPKCS7 pkcs7, SignatureUtil signatureUtil, string signatureName, string signerName)
         {
             try
             {
-                using (var pdfReader = new PdfReader(filePath))
-                using (var pdfDoc = new PdfDocument(pdfReader))
-                {
-                    var signatureUtil = new SignatureUtil(pdfDoc);
-                    var signatureNames = signatureUtil.GetSignatureNames();
-
-                    if (!signatureNames.Any())
-                    {
-                        return new AnalysisResult
-                        {
-                            Level = AnalysisResult.SignatureLevel.SES,
-                            Title = "Geen Cryptografische Handtekening",
-                            Color = new SolidColorBrush(Colors.Orange),
-                            Explanation = "Dit programma heeft geen cryptografisch geldige handtekening (AES of QES) gevonden.\n\n" +
-                     "Wat betekent dit?\n" +
-                     "De PDF kan een Standaard Elektronische Handtekening (SES) bevatten, zoals een scan van een 'natte' handtekening. Dit programma kan de geldigheid hiervan niet controleren. U dient dit visueel te beoordelen."
-                        };
-                    }
-
-                    var name = signatureNames.First();
-                    PdfPKCS7 pkcs7 = signatureUtil.ReadSignatureData(name);
-                    IX509Certificate signingCert = pkcs7.GetSigningCertificate();
-                    string signerName = CertificateInfo.GetSubjectFields(signingCert)?.GetField("CN") ?? "Onbekend";
-                    bool isValid = pkcs7.VerifySignatureIntegrityAndAuthenticity();
-
-                    if (isValid)
-                    {
-                        bool isQES = IsCertificateChainQualified(pkcs7);
-                        if (isQES)
-                        {
-                            return new AnalysisResult
-                            {
-                                Level = AnalysisResult.SignatureLevel.QES,
-                                Title = "Gekwalificeerde Handtekening (QES)",
-                                Color = new SolidColorBrush(Colors.LightGreen),
-                                SignerInfo = $"Ondertekend door: {signerName}",
-                                Explanation = "Deze handtekening is cryptografisch geldig én is geverifieerd tegen de officiële EU Trust List. Dit is een Gekwalificeerde Elektronische Handtekening (QES).\n\n" +
-                                              "Wat betekent dit?\n" +
-                                              "Een QES heeft dezelfde juridische status als een handgeschreven handtekening in de hele Europese Unie. Het biedt het hoogste niveau van zekerheid."
-                            };
-                        }
-                        else
-                        {
-                            // Het is een AES. Nu voegen we de waarschuwing toe als de EUTL leeg is.
-                            string eutlWarning = string.Empty;
-                            if (!_eutlService.TrustedCertificates.Any())
-                            {
-                                eutlWarning = "\n\nWAARSCHUWING: De EU Trust List kon niet worden geladen. Deze handtekening kon daarom niet op QES-status worden gecontroleerd en wordt als AES weergegeven.";
-                            }
-
-                            return new AnalysisResult
-                            {
-                                Level = AnalysisResult.SignatureLevel.AES,
-                                Title = "Geavanceerde Handtekening (AES)",
-                                Color = new SolidColorBrush(Colors.DodgerBlue),
-                                SignerInfo = $"Ondertekend door: {signerName}",
-                                Explanation = "Het document bevat een cryptografisch geldige handtekening. Dit wordt geclassificeerd als een Geavanceerde Elektronische Handtekening (AES).\n\n" +
-                                              "Wat betekent dit?\n" +
-                                              "De handtekening is geldig en het document is niet gewijzigd na ondertekening. Deze handtekening is echter niet geverifieerd tegen de EU Trust List en telt daarom niet als 'Gekwalificeerd'." +
-                                              eutlWarning // Voeg de waarschuwing hier toe
-                            };
-                        }
-                    }
-                    // GEREPAREERDE BLOK
-                    else
-                    {
-                        // De handtekening is cryptografisch ongeldig. Laten we de redenen verzamelen.
-                        var issues = new List<string>();
-
-                        // Detail 1: Controleer de geldigheid van het certificaat op de datum van ondertekening.
-                        try
-                        {
-                            var parser = new X509CertificateParser();
-                            var bouncyCastleCert = parser.ReadCertificate(signingCert.GetEncoded());
-                            // Laat BouncyCastle de datums controleren.
-                            bouncyCastleCert.CheckValidity(pkcs7.GetSignDate());
-                        }
-                        catch (Exception certEx)
-                        {
-                            issues.Add($"Het gebruikte certificaat was ongeldig op het moment van ondertekenen. Reden: {certEx.Message}");
-                        }
-
-                        // Detail 2: Controleer of de handtekening het hele document dekt.
-                        if (!signatureUtil.SignatureCoversWholeDocument(name))
-                        {
-                            issues.Add("De handtekening dekt niet het volledige document. Dit kan betekenen dat er later niet-ondertekende content is toegevoegd.");
-                        }
-
-                        // Detail 3: Als de bovenstaande checks geen fout geven, is de integriteit zelf het probleem.
-                        if (!issues.Any())
-                        {
-                            issues.Add("De cryptografische integriteit van de handtekening is verbroken. Dit duidt er meestal op dat het document is gewijzigd NADAT de handtekening is geplaatst.");
-                        }
-
-                        return new AnalysisResult
-                        {
-                            Level = AnalysisResult.SignatureLevel.SES,
-                            Title = "ONGELDIGE Handtekening Gevonden",
-                            Color = new SolidColorBrush(Colors.Red),
-                            SignerInfo = $"Ondertekenaar (volgens certificaat): {signerName}",
-                            Explanation = "Er is een cryptografische handtekening gevonden, maar deze is ONGELDIG. De integriteit van het document is niet gegarandeerd.\n\n" +
-                                          $"Gevonden Problemen:\n- {string.Join("\n- ", issues)}"
-                        };
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                return new AnalysisResult 
-                { 
-                    Level = AnalysisResult.SignatureLevel.SES, // Of een ander niveau, afhankelijk van hoe je dit wilt classificeren
-                    Title = "Fout bij Analyse", 
-                    Color = new SolidColorBrush(Colors.DarkRed), // Een duidelijke foutkleur
-                    Explanation = $"Er is een onverwachte fout opgetreden tijdens de analyse van de PDF: {ex.Message}\n" +
-                                  "Controleer of het bestand een geldige PDF is en niet beschadigd."
-                };
-            }
-        }
-
-        private AnalysisResult AnalyzeSingleSignature(PdfPKCS7 pkcs7, SignatureUtil signatureUtil, string signatureName, string signerName)
-{
-    try
-    {
-        IX509Certificate signingCert = pkcs7.GetSigningCertificate();
-        bool isValid = pkcs7.VerifySignatureIntegrityAndAuthenticity();
+                IX509Certificate signingCert = pkcs7.GetSigningCertificate();
+                bool isValid = pkcs7.VerifySignatureIntegrityAndAuthenticity();
 
                 var (tsExists, tsValid, tsQualified, tsInfo) = AnalyzeTimestamp(pkcs7);
-                
-        if (isValid)
-        {
-            bool isQES = IsCertificateChainQualified(pkcs7);
-            if (isQES)
-            {
-                        // Bereken de timestamp uitleg specifiek voor QES
+
+                if (isValid)
+                {
+                    bool isQES = IsCertificateChainQualified(pkcs7);
+                    if (isQES)
+                    {
                         string timestampExplanation = tsExists && tsValid
                             ? "\n\n✓ Deze handtekening bevat een geldige tijdstempel. Het tijdstip van ondertekening is cryptografisch beveiligd."
                             : "\n\n⚠ Deze handtekening bevat GEEN tijdstempel. De getoonde ondertekeningsdatum komt van de computer van de ondertekenaar en kan niet onafhankelijk worden geverifieerd.";
 
-                return new AnalysisResult
-                {
-                    Level = AnalysisResult.SignatureLevel.QES,
-                    Title = "Gekwalificeerde Handtekening (QES)",
-                    Color = new SolidColorBrush(Colors.LightGreen),
-                    SignerInfo = $"Ondertekend door: {signerName}",
-                    TimestampInfo = tsInfo,  // NIEUW
-                    HasQualifiedTimestamp = tsQualified,  // NIEUW
-                    Explanation = "Deze handtekening is cryptografisch geldig én is geverifieerd tegen de officiële EU Trust List. Dit is een Gekwalificeerde Elektronische Handtekening (QES).\n\n" +
-                                  "Wat betekent dit?\n" +
-                                  "Een QES heeft dezelfde juridische status als een handgeschreven handtekening in de hele Europese Unie. Het biedt het hoogste niveau van zekerheid." +
-                                  timestampExplanation  // NIEUW: voeg timestamp uitleg toe
-                };
-            }
-            else
-            {
-                // Het is een AES. Nu voegen we de waarschuwing toe als de EUTL leeg is.
-                string eutlWarning = string.Empty;
-                if (!_eutlService.TrustedCertificates.Any())
-                {
-                    eutlWarning = "\n\nWAARSCHUWING: De EU Trust List kon niet worden geladen. Deze handtekening kon daarom niet op QES-status worden gecontroleerd en wordt als AES weergegeven.";
-                }
+                        return new AnalysisResult
+                        {
+                            Level = AnalysisResult.SignatureLevel.QES,
+                            Title = "Gekwalificeerde Handtekening (QES)",
+                            Color = new SolidColorBrush(Colors.LightGreen),
+                            SignerInfo = $"Ondertekend door: {signerName}",
+                            TimestampInfo = tsInfo,
+                            HasQualifiedTimestamp = tsQualified,
+                            Explanation = "Deze handtekening is cryptografisch geldig én is geverifieerd tegen de officiële EU Trust List. Dit is een Gekwalificeerde Elektronische Handtekening (QES).\n\n" +
+                                          "Wat betekent dit?\n" +
+                                          "Een QES heeft dezelfde juridische status als een handgeschreven handtekening in de hele Europese Unie. Het biedt het hoogste niveau van zekerheid." +
+                                          timestampExplanation
+                        };
+                    }
+                    else
+                    {
+                        string eutlWarning = string.Empty;
+                        if (!_eutlService.TrustedCertificates.Any())
+                        {
+                            eutlWarning = "\n\nWAARSCHUWING: De EU Trust List kon niet worden geladen. Deze handtekening kon daarom niet op QES-status worden gecontroleerd en wordt als AES weergegeven.";
+                        }
 
-                        // Bereken de timestamp uitleg specifiek voor AES
                         string timestampExplanation = tsExists && tsValid
                             ? "\n\n✓ Deze handtekening bevat een geldige tijdstempel."
                             : "\n\n⚠ Deze handtekening bevat GEEN tijdstempel.";
 
                         return new AnalysisResult
+                        {
+                            Level = AnalysisResult.SignatureLevel.AES,
+                            Title = "Geavanceerde Handtekening (AES)",
+                            Color = new SolidColorBrush(Colors.DodgerBlue),
+                            SignerInfo = $"Ondertekend door: {signerName}",
+                            TimestampInfo = tsInfo,
+                            HasQualifiedTimestamp = tsQualified,
+                            Explanation = "Het document bevat een cryptografisch geldige handtekening. Dit wordt geclassificeerd als een Geavanceerde Elektronische Handtekening (AES).\n\n" +
+                                          "Wat betekent dit?\n" +
+                                          "De handtekening is geldig en het document is niet gewijzigd na ondertekening. Deze handtekening is echter niet geverifieerd tegen de EU Trust List en telt daarom niet als 'Gekwalificeerd'." +
+                                          eutlWarning +
+                                          timestampExplanation
+                        };
+                    }
+                }
+                else
                 {
-                    Level = AnalysisResult.SignatureLevel.AES,
-                    Title = "Geavanceerde Handtekening (AES)",
-                    Color = new SolidColorBrush(Colors.DodgerBlue),
-                    SignerInfo = $"Ondertekend door: {signerName}",
-                    TimestampInfo = tsInfo,  // NIEUW
-                    HasQualifiedTimestamp = tsQualified,  // NIEUW
-                    Explanation = "Het document bevat een cryptografisch geldige handtekening. Dit wordt geclassificeerd als een Geavanceerde Elektronische Handtekening (AES).\n\n" +
-                                  "Wat betekent dit?\n" +
-                                  "De handtekening is geldig en het document is niet gewijzigd na ondertekening. Deze handtekening is echter niet geverifieerd tegen de EU Trust List en telt daarom niet als 'Gekwalificeerd'." +
-                                  eutlWarning +
-                                  timestampExplanation  // NIEUW: voeg timestamp uitleg toe
+                    var issues = new List<string>();
+
+                    try
+                    {
+                        var parser = new X509CertificateParser();
+                        var bouncyCastleCert = parser.ReadCertificate(signingCert.GetEncoded());
+                        bouncyCastleCert.CheckValidity(pkcs7.GetSignDate());
+                    }
+                    catch (Exception certEx)
+                    {
+                        issues.Add($"Het gebruikte certificaat was ongeldig op het moment van ondertekenen. Reden: {certEx.Message}");
+                    }
+
+                    if (!signatureUtil.SignatureCoversWholeDocument(signatureName))
+                    {
+                        issues.Add("De handtekening dekt niet het volledige document. Dit kan betekenen dat er later niet-ondertekende content is toegevoegd.");
+                    }
+
+                    if (!issues.Any())
+                    {
+                        issues.Add("De cryptografische integriteit van de handtekening is verbroken. Dit duidt er meestal op dat het document is gewijzigd NADAT de handtekening is geplaatst.");
+                    }
+
+                    return new AnalysisResult
+                    {
+                        Level = AnalysisResult.SignatureLevel.SES,
+                        Title = "ONGELDIGE Handtekening Gevonden",
+                        Color = new SolidColorBrush(Colors.Red),
+                        SignerInfo = $"Ondertekenaar (volgens certificaat): {signerName}",
+                        Explanation = "Er is een cryptografische handtekening gevonden, maar deze is ONGELDIG. De integriteit van het document is niet gegarandeerd.\n\n" +
+                                      $"Gevonden Problemen:\n- {string.Join("\n- ", issues)}"
+                    };
+                }
+            }
+            catch (Exception ex)
+            {
+                return new AnalysisResult
+                {
+                    Level = AnalysisResult.SignatureLevel.SES,
+                    Title = "Fout bij Analyse",
+                    Color = new SolidColorBrush(Colors.DarkRed),
+                    Explanation = $"Er is een fout opgetreden tijdens de analyse van deze handtekening: {ex.Message}"
                 };
             }
         }
-        else
-        {
-            // De handtekening is cryptografisch ongeldig. Laten we de redenen verzamelen.
-            var issues = new List<string>();
-
-            // Detail 1: Controleer de geldigheid van het certificaat op de datum van ondertekening.
-            try
-            {
-                var parser = new X509CertificateParser();
-                var bouncyCastleCert = parser.ReadCertificate(signingCert.GetEncoded());
-                bouncyCastleCert.CheckValidity(pkcs7.GetSignDate());
-            }
-            catch (Exception certEx)
-            {
-                issues.Add($"Het gebruikte certificaat was ongeldig op het moment van ondertekenen. Reden: {certEx.Message}");
-            }
-
-            // Detail 2: Controleer of de handtekening het hele document dekt.
-            if (!signatureUtil.SignatureCoversWholeDocument(signatureName))
-            {
-                issues.Add("De handtekening dekt niet het volledige document. Dit kan betekenen dat er later niet-ondertekende content is toegevoegd.");
-            }
-
-            // Detail 3: Als de bovenstaande checks geen fout geven, is de integriteit zelf het probleem.
-            if (!issues.Any())
-            {
-                issues.Add("De cryptografische integriteit van de handtekening is verbroken. Dit duidt er meestal op dat het document is gewijzigd NADAT de handtekening is geplaatst.");
-            }
-
-            return new AnalysisResult
-            {
-                Level = AnalysisResult.SignatureLevel.SES,
-                Title = "ONGELDIGE Handtekening Gevonden",
-                Color = new SolidColorBrush(Colors.Red),
-                SignerInfo = $"Ondertekenaar (volgens certificaat): {signerName}",
-                Explanation = "Er is een cryptografische handtekening gevonden, maar deze is ONGELDIG. De integriteit van het document is niet gegarandeerd.\n\n" +
-                              $"Gevonden Problemen:\n- {string.Join("\n- ", issues)}"
-            };
-        }
-    }
-    catch (Exception ex)
-    {
-        return new AnalysisResult
-        {
-            Level = AnalysisResult.SignatureLevel.SES,
-            Title = "Fout bij Analyse",
-            Color = new SolidColorBrush(Colors.DarkRed),
-            Explanation = $"Er is een fout opgetreden tijdens de analyse van deze handtekening: {ex.Message}"
-        };
-    }
-}
 
         private List<SignatureInfo> AnalyzeAllSignatures(string filePath)
         {
@@ -436,10 +341,8 @@ namespace PdfSignatureVerifier.App
                             sigInfo.SignerName = CertificateInfo.GetSubjectFields(signingCert)?.GetField("CN") ?? "Onbekend";
                             sigInfo.SignDate = pkcs7.GetSignDate().ToString("dd-MM-yyyy HH:mm");
 
-                            // Voer volledige analyse uit voor deze handtekening
                             sigInfo.FullAnalysis = AnalyzeSingleSignature(pkcs7, signatureUtil, name, sigInfo.SignerName);
 
-                            // Bepaal de status voor de lijst
                             sigInfo.Status = sigInfo.FullAnalysis.Level switch
                             {
                                 AnalysisResult.SignatureLevel.QES => "QES ✓",
@@ -475,10 +378,8 @@ namespace PdfSignatureVerifier.App
         {
             if (SignatureListBox.SelectedItem is SignatureInfo selected)
             {
-                // Use the REAL file path for the viewer
                 UpdateUIWithResult(selected.FullAnalysis, _currentFilePath);
 
-                // If you still want to show which signature is selected, update a separate label:
                 ResultFilename.Text =
                     $"Bestand: {System.IO.Path.GetFileName(_currentFilePath)}\n" +
                     $"Handtekening {selected.Index}: {selected.SignerName}\n" +
@@ -505,17 +406,13 @@ namespace PdfSignatureVerifier.App
                     return false;
                 }
 
-                // --- DE NIEUWE, SNELLE CRL-CHECK ---
-                // Controleer elk certificaat in de keten tegen de 'Master Zwarte Lijst'.
                 foreach (var certInChain in certChainFromPdf)
                 {
                     if (_eutlService.RevokedSerialNumbers.Contains(certInChain.SerialNumber.ToString()))
                     {
-                        // GEVONDEN OP ZWARTE LIJST! De hele keten is per definitie ongeldig.
                         return false;
                     }
                 }
-                // --- EINDE CRL-CHECK ---
 
                 var trustedEutlCerts = _eutlService.TrustedCertificates.ToHashSet();
                 for (int i = 0; i < certChainFromPdf.Count; i++)
@@ -545,12 +442,10 @@ namespace PdfSignatureVerifier.App
             ResultPanel.BorderBrush = result.Color;
             ResultTitle.Text = result.Title;
             ResultTitle.Foreground = result.Color;
-            // Keep showing the actual file name here
             ResultFilename.Text = $"Bestand: {System.IO.Path.GetFileName(filePath)}\n{result.SignerInfo}";
             ResultExplanation.Text = result.Explanation;
             ResultPanel.Visibility = Visibility.Visible;
 
-            // Always navigate using the REAL path
             PdfWebView.Source = new Uri(new Uri(filePath).AbsoluteUri);
         }
 
@@ -561,7 +456,6 @@ namespace PdfSignatureVerifier.App
                 firstRun.Text = text;
             }
 
-            // Show or hide the drag-and-drop hint by setting/clearing the text
             if (SelectPdfButtonHint != null)
             {
                 SelectPdfButtonHint.Text = showDragHint ? "of sleep een PDF bestand hierheen" : "";
@@ -570,18 +464,16 @@ namespace PdfSignatureVerifier.App
 
         private void ExitMenuItem_Click(object sender, RoutedEventArgs e)
         {
-            System.Windows.Application.Current.Shutdown(); // Gebruik de volledige kwalificatie
-        
+            System.Windows.Application.Current.Shutdown();
         }
 
         private void OnlineHelpMenuItem_Click(object sender, RoutedEventArgs e)
         {
-            // Voorbeeld: Open een URL in de standaardbrowser
             try
             {
                 System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
                 {
-                    FileName = "https://www.jouwwebsite.nl/help", // Vervang dit met je eigen help-URL
+                    FileName = "https://www.jouwwebsite.nl/help",
                     UseShellExecute = true
                 });
             }
@@ -591,13 +483,10 @@ namespace PdfSignatureVerifier.App
             }
         }
 
-        
-
         private (bool exists, bool isValid, bool isQualified, string info) AnalyzeTimestamp(PdfPKCS7 pkcs7)
         {
             try
             {
-                // Stap 1: Controleer of er een timestamp bestaat
                 DateTime? timestampDate = pkcs7.GetTimeStampDate();
 
                 if (!timestampDate.HasValue)
@@ -605,7 +494,6 @@ namespace PdfSignatureVerifier.App
                     return (false, false, false, "Geen tijdstempel aanwezig");
                 }
 
-                // Stap 2: Verifieer de timestamp
                 bool isTimestampValid = false;
                 try
                 {
@@ -621,17 +509,14 @@ namespace PdfSignatureVerifier.App
                     return (true, false, false, $"Tijdstempel aanwezig ({timestampDate:dd-MM-yyyy HH:mm}) maar is ONGELDIG");
                 }
 
-                // Stap 3: Timestamp is geldig
-                // We kunnen niet betrouwbaar het TSA certificaat verkrijgen, dus we tonen alleen dat er een geldige timestamp is
                 string info = $"✓ Geldige tijdstempel: {timestampDate:dd-MM-yyyy HH:mm:ss} UTC";
 
-                // Als de EUTL beschikbaar is, vermelden we dat we niet kunnen verifiëren of het gekwalificeerd is
                 if (_eutlService.TrustedCertificates != null && _eutlService.TrustedCertificates.Any())
                 {
                     info += "\n(Verificatie tegen EU Trust List: niet ondersteund voor timestamps)";
                 }
 
-                return (true, true, false, info); // exists=true, valid=true, qualified=false (kunnen we niet bepalen)
+                return (true, true, false, info);
             }
             catch (Exception ex)
             {
@@ -644,59 +529,478 @@ namespace PdfSignatureVerifier.App
             Clipboard.SetText(LogTextBox.Text);
         }
 
+        #region Drag and Drop Event Handlers - UITGEBREID
 
-        // NIEUW TOE TE VOEGEN BLOK: Event handlers voor drag-and-drop op het linkerpaneel
         private void LeftPanelDropTarget_DragEnter(object sender, DragEventArgs e)
         {
-            // Zorg dat de LeftPanelDropTarget zichtbaar wordt (als vangnet)
             LeftPanelDropTarget.Visibility = Visibility.Visible;
-            e.Effects = DragDropEffects.None; // Start met 'verboden' cursor
+
+            if (IsValidDrop(e.Data))
+            {
+                e.Effects = DragDropEffects.Copy;
+            }
+            else
+            {
+                e.Effects = DragDropEffects.None;
+            }
             e.Handled = true;
         }
 
         private void LeftPanelDropTarget_DragOver(object sender, DragEventArgs e)
         {
-            bool isPdf = e.Data.GetDataPresent(DataFormats.FileDrop) &&
-                         ((string[])e.Data.GetData(DataFormats.FileDrop))
-                         .Any(f => f.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase));
-
-            if (isPdf)
+            if (IsValidDrop(e.Data))
             {
                 e.Effects = DragDropEffects.Copy;
-                //DragDropOverlay.Visibility = Visibility.Visible; // Toon de blauwe overlay
             }
             else
             {
                 e.Effects = DragDropEffects.None;
-                //DragDropOverlay.Visibility = Visibility.Collapsed; // Verberg de overlay als het geen PDF is
             }
             e.Handled = true;
         }
 
         private void LeftPanelDropTarget_DragLeave(object sender, DragEventArgs e)
         {
-            // Verberg zowel de overlay als het vangnet
-            //DragDropOverlay.Visibility = Visibility.Collapsed;
             LeftPanelDropTarget.Visibility = Visibility.Collapsed;
             e.Handled = true;
         }
 
-        private void LeftPanelDropTarget_Drop(object sender, DragEventArgs e)
+        private async void LeftPanelDropTarget_Drop(object sender, DragEventArgs e)
         {
-            // Verberg zowel de overlay als het vangnet
-            //DragDropOverlay.Visibility = Visibility.Collapsed;
             LeftPanelDropTarget.Visibility = Visibility.Collapsed;
 
-            if (e.Data.GetDataPresent(DataFormats.FileDrop))
+            string filePath = null;
+
+            // Prioriteit 1: Outlook/Email bijlagen (FileGroupDescriptor formaat)
+            if (e.Data.GetDataPresent("FileGroupDescriptorW") || e.Data.GetDataPresent("FileGroupDescriptor"))
             {
-                var files = (string[])e.Data.GetData(DataFormats.FileDrop);
-                var pdfFile = files.FirstOrDefault(f => f.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase));
-                if (pdfFile != null)
+                filePath = await HandleOutlookAttachment(e.Data);
+            }
+            // Prioriteit 2: Standaard bestand drop vanuit Windows Verkenner
+            else if (e.Data.GetDataPresent(DataFormats.FileDrop))
+            {
+                try
                 {
-                    StartAnalysis(pdfFile);
+                    string[] files = (string[])e.Data.GetData(DataFormats.FileDrop);
+                    if (files != null && files.Length > 0)
+                    {
+                        filePath = files.FirstOrDefault(f => f.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase));
+                    }
+                }
+                catch (COMException)
+                {
+                    // FileDrop mislukt, probeer virtuele bestand benadering
+                    filePath = await HandleOutlookAttachment(e.Data);
                 }
             }
+            // Prioriteit 3: Web-gebaseerde email (probeer te extraheren, anders toon instructies)
+            else
+            {
+                filePath = await HandleWebBasedEmail(e.Data);
+            }
+
+            // Verwerk het bestand als het succesvol is geëxtraheerd
+            if (!string.IsNullOrEmpty(filePath) && File.Exists(filePath))
+            {
+                StartAnalysis(filePath);
+            }
+
             e.Handled = true;
         }
+
+        #endregion
+
+        #region Email Attachment Helper Methods
+
+        /// <summary>
+        /// Controleert of de drag data geldige bestandsformaten bevat
+        /// </summary>
+        private bool IsValidDrop(System.Windows.IDataObject data)
+        {
+            return data.GetDataPresent(DataFormats.FileDrop) ||
+                   data.GetDataPresent("FileGroupDescriptorW") ||
+                   data.GetDataPresent("FileGroupDescriptor") ||
+                   data.GetDataPresent("FileNameW") ||
+                   data.GetDataPresent("FileName");
+        }
+
+        /// <summary>
+        /// Verwerkt Outlook desktop bijlagen met FileGroupDescriptor formaat
+        /// </summary>
+        private async Task<string> HandleOutlookAttachment(System.Windows.IDataObject data)
+        {
+            try
+            {
+                string descriptorFormat = data.GetDataPresent("FileGroupDescriptorW")
+                    ? "FileGroupDescriptorW"
+                    : "FileGroupDescriptor";
+
+                MemoryStream descriptorStream = (MemoryStream)data.GetData(descriptorFormat);
+                if (descriptorStream == null || descriptorStream.Length < 4)
+                    return null;
+
+                byte[] descriptorBytes = descriptorStream.ToArray();
+                int fileCount = BitConverter.ToInt32(descriptorBytes, 0);
+
+                if (fileCount > 0)
+                {
+                    int structSize = Marshal.SizeOf(typeof(FILEDESCRIPTOR));
+                    if (4 + structSize > descriptorBytes.Length)
+                        return null;
+
+                    IntPtr ptr = Marshal.AllocHGlobal(structSize);
+                    try
+                    {
+                        Marshal.Copy(descriptorBytes, 4, ptr, structSize);
+                        FILEDESCRIPTOR fileDescriptor = Marshal.PtrToStructure<FILEDESCRIPTOR>(ptr);
+
+                        string fileName = fileDescriptor.cFileName;
+                        fileName = Path.GetInvalidFileNameChars()
+                            .Aggregate(fileName, (current, c) => current.Replace(c.ToString(), "_"));
+
+                        // Alleen PDF bestanden verwerken
+                        if (!fileName.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase))
+                            return null;
+
+                        // Verkrijg bestandsinhoud
+                        ComTypes.IDataObject comData = data as ComTypes.IDataObject;
+                        if (comData == null)
+                            return null;
+
+                        MemoryStream fileContentStream = GetFileContents(comData, 0);
+                        if (fileContentStream != null && fileContentStream.Length > 0)
+                        {
+                            string tempPath = GetUniqueTempPath(fileName);
+                            await SaveStreamToFileAsync(fileContentStream, tempPath);
+                            return tempPath;
+                        }
+                    }
+                    finally
+                    {
+                        Marshal.FreeHGlobal(ptr);
+                    }
+                }
+            }
+            catch
+            {
+                // Mislukt om te extraheren, return null
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Verwerkt web-gebaseerde email clients - toont Nederlandse instructies als bestand niet toegankelijk is
+        /// </summary>
+        private async Task<string> HandleWebBasedEmail(System.Windows.IDataObject data)
+        {
+            try
+            {
+                ComTypes.IDataObject comData = data as ComTypes.IDataObject;
+                if (comData == null)
+                    return null;
+
+                // Probeer alle beschikbare formaten voor daadwerkelijke PDF inhoud
+                string[] allFormats = data.GetFormats();
+
+                foreach (string formatName in allFormats)
+                {
+                    // Sla bekende metadata-only formaten over
+                    if (IsMetadataFormat(formatName))
+                        continue;
+
+                    try
+                    {
+                        MemoryStream contentStream = TryGetStreamFromFormat(comData, formatName);
+
+                        if (contentStream != null && contentStream.Length > 0)
+                        {
+                            // Controleer of dit een geldige PDF is
+                            if (await IsValidPdfStream(contentStream))
+                            {
+                                string tempPath = GetUniqueTempPath("email_bijlage.pdf");
+                                await SaveStreamToFileAsync(contentStream, tempPath);
+                                return tempPath;
+                            }
+                        }
+                    }
+                    catch
+                    {
+                        continue;
+                    }
+                }
+
+                // Geen daadwerkelijk bestand gevonden - toon Nederlandse instructies
+                ShowDutchSaveInstructions();
+                return null;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Toont Nederlandse melding waarin gebruiker wordt gevraagd bijlage eerst op te slaan
+        /// </summary>
+        private void ShowDutchSaveInstructions()
+        {
+            MessageBox.Show(
+                "De e-mailclient biedt geen directe toegang tot de bijlage.\n\n" +
+                "1 Sla het PDF bestand op in een lokale folder'\n" +
+                "2. Sleep het opgeslagen bestand vanuit uw\n" +
+                "   Downloads-map naar dit venster\n\n" +
+                "Het bestand wordt dan automatisch verwerkt.",
+                "Bijlage eerst opslaan",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+        }
+
+        /// <summary>
+        /// Verkrijgt FileContents van COM IDataObject met specifieke index
+        /// </summary>
+        private MemoryStream GetFileContents(ComTypes.IDataObject comData, int index)
+        {
+            try
+            {
+                ushort cfFileContents = RegisterClipboardFormat("FileContents");
+
+                ComTypes.FORMATETC formatetc = new ComTypes.FORMATETC
+                {
+                    cfFormat = (short)cfFileContents,
+                    dwAspect = ComTypes.DVASPECT.DVASPECT_CONTENT,
+                    lindex = index,
+                    tymed = ComTypes.TYMED.TYMED_ISTREAM | ComTypes.TYMED.TYMED_HGLOBAL,
+                    ptd = IntPtr.Zero
+                };
+
+                ComTypes.STGMEDIUM medium = new ComTypes.STGMEDIUM();
+                comData.GetData(ref formatetc, out medium);
+
+                try
+                {
+                    // Probeer eerst IStream
+                    if ((medium.tymed & ComTypes.TYMED.TYMED_ISTREAM) != 0)
+                    {
+                        IStream istream = Marshal.GetObjectForIUnknown(medium.unionmember) as IStream;
+                        if (istream != null)
+                        {
+                            ComTypes.STATSTG statstg;
+                            istream.Stat(out statstg, 0);
+
+                            byte[] buffer = new byte[statstg.cbSize];
+                            IntPtr bytesReadPtr = Marshal.AllocHGlobal(sizeof(int));
+                            try
+                            {
+                                istream.Read(buffer, (int)statstg.cbSize, bytesReadPtr);
+                                int bytesRead = Marshal.ReadInt32(bytesReadPtr);
+                                return new MemoryStream(buffer, 0, bytesRead);
+                            }
+                            finally
+                            {
+                                Marshal.FreeHGlobal(bytesReadPtr);
+                            }
+                        }
+                    }
+                    // Probeer HGLOBAL
+                    else if ((medium.tymed & ComTypes.TYMED.TYMED_HGLOBAL) != 0 && medium.unionmember != IntPtr.Zero)
+                    {
+                        IntPtr ptr = GlobalLock(medium.unionmember);
+                        try
+                        {
+                            int size = GlobalSize(medium.unionmember);
+                            if (size > 0)
+                            {
+                                byte[] buffer = new byte[size];
+                                Marshal.Copy(ptr, buffer, 0, size);
+                                return new MemoryStream(buffer);
+                            }
+                        }
+                        finally
+                        {
+                            GlobalUnlock(medium.unionmember);
+                        }
+                    }
+                }
+                finally
+                {
+                    ReleaseStgMedium(ref medium);
+                }
+            }
+            catch
+            {
+                // Stil falen
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Probeert stream te verkrijgen van specifiek clipboard formaat
+        /// </summary>
+        private MemoryStream TryGetStreamFromFormat(ComTypes.IDataObject comData, string formatName)
+        {
+            try
+            {
+                ushort cfFormat = RegisterClipboardFormat(formatName);
+
+                ComTypes.FORMATETC formatetc = new ComTypes.FORMATETC
+                {
+                    cfFormat = (short)cfFormat,
+                    dwAspect = ComTypes.DVASPECT.DVASPECT_CONTENT,
+                    lindex = -1,
+                    tymed = ComTypes.TYMED.TYMED_ISTREAM | ComTypes.TYMED.TYMED_HGLOBAL,
+                    ptd = IntPtr.Zero
+                };
+
+                ComTypes.STGMEDIUM medium = new ComTypes.STGMEDIUM();
+                comData.GetData(ref formatetc, out medium);
+
+                try
+                {
+                    if ((medium.tymed & ComTypes.TYMED.TYMED_ISTREAM) != 0)
+                    {
+                        IStream istream = Marshal.GetObjectForIUnknown(medium.unionmember) as IStream;
+                        if (istream != null)
+                        {
+                            ComTypes.STATSTG statstg;
+                            istream.Stat(out statstg, 0);
+
+                            byte[] buffer = new byte[statstg.cbSize];
+                            IntPtr bytesReadPtr = Marshal.AllocHGlobal(sizeof(int));
+                            try
+                            {
+                                istream.Read(buffer, (int)statstg.cbSize, bytesReadPtr);
+                                int bytesRead = Marshal.ReadInt32(bytesReadPtr);
+                                return new MemoryStream(buffer, 0, bytesRead);
+                            }
+                            finally
+                            {
+                                Marshal.FreeHGlobal(bytesReadPtr);
+                            }
+                        }
+                    }
+                    else if ((medium.tymed & ComTypes.TYMED.TYMED_HGLOBAL) != 0 && medium.unionmember != IntPtr.Zero)
+                    {
+                        IntPtr ptr = GlobalLock(medium.unionmember);
+                        try
+                        {
+                            int size = GlobalSize(medium.unionmember);
+                            if (size > 0)
+                            {
+                                byte[] buffer = new byte[size];
+                                Marshal.Copy(ptr, buffer, 0, size);
+                                return new MemoryStream(buffer);
+                            }
+                        }
+                        finally
+                        {
+                            GlobalUnlock(medium.unionmember);
+                        }
+                    }
+                }
+                finally
+                {
+                    ReleaseStgMedium(ref medium);
+                }
+            }
+            catch
+            {
+                // Formaat niet beschikbaar
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Controleert of formaatname alleen metadata is (geen daadwerkelijke bestandsinhoud)
+        /// </summary>
+        private bool IsMetadataFormat(string formatName)
+        {
+            return formatName == "DragContext" ||
+                   formatName == "DragImageBits" ||
+                   formatName == "InShellDragLoop" ||
+                   formatName == "Preferred DropEffect" ||
+                   formatName == "Shell Object Offsets" ||
+                   formatName == "chromium/x-renderer-taint" ||
+                   formatName == "FileName" ||
+                   formatName == "FileNameW";
+        }
+
+        /// <summary>
+        /// Valideert of stream een geldig PDF bestand bevat
+        /// </summary>
+        private async Task<bool> IsValidPdfStream(MemoryStream stream)
+        {
+            try
+            {
+                if (stream.Length < 5)
+                    return false;
+
+                long originalPosition = stream.Position;
+                stream.Position = 0;
+
+                byte[] header = new byte[5];
+                await stream.ReadAsync(header, 0, 5);
+
+                stream.Position = originalPosition;
+
+                // PDF bestanden beginnen met "%PDF-"
+                return header[0] == 0x25 && // %
+                       header[1] == 0x50 && // P
+                       header[2] == 0x44 && // D
+                       header[3] == 0x46 && // F
+                       header[4] == 0x2D;   // -
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Verkrijgt uniek tijdelijk bestandspad
+        /// </summary>
+        private string GetUniqueTempPath(string fileName)
+        {
+            fileName = Path.GetInvalidFileNameChars()
+                .Aggregate(fileName, (current, c) => current.Replace(c.ToString(), "_"));
+
+            string tempPath = Path.Combine(Path.GetTempPath(), fileName);
+            int counter = 0;
+            string originalTempPath = tempPath;
+
+            while (File.Exists(tempPath))
+            {
+                counter++;
+                tempPath = Path.Combine(
+                    Path.GetTempPath(),
+                    Path.GetFileNameWithoutExtension(originalTempPath) +
+                    $"_{counter}" +
+                    Path.GetExtension(originalTempPath));
+            }
+
+            return tempPath;
+        }
+
+        /// <summary>
+        /// Slaat stream asynchroon op naar bestand
+        /// </summary>
+        private async Task SaveStreamToFileAsync(Stream stream, string filePath)
+        {
+            using (FileStream fileStream = new FileStream(
+                filePath,
+                FileMode.Create,
+                FileAccess.Write,
+                FileShare.None,
+                4096,
+                useAsync: true))
+            {
+                stream.Position = 0;
+                await stream.CopyToAsync(fileStream);
+            }
+        }
+
+        #endregion
     }
 }

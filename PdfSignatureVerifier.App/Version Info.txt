@@ -1,2 +1,5 @@
+v1.0.1.0 - 15 november 2025
+*Drag and drop vanuit Outlook toegevoegd
+
 v1.0.0.0 - 26 oktober 2025
 *Lancering van de eerste versie

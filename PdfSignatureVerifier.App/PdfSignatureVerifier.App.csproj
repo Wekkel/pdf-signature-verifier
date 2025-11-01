@@ -10,9 +10,9 @@
 	  <AssemblyProduct>EHT Checker</AssemblyProduct>
 	  <AssemblyCompany>WekSoft</AssemblyCompany>
 	  <AssemblyCopyright>Copyright © WekSoft 2025</AssemblyCopyright>
-	  <AssemblyVersion>1.0.0.0</AssemblyVersion>
-	  <FileVersion>1.0.0.0</FileVersion>
-	  <Version>1.0.0</Version>
+	  <AssemblyVersion>1.0.1.0</AssemblyVersion>
+	  <FileVersion>1.0.1.0</FileVersion>
+	  <Version>1.0.1.0</Version>
 	  <!-- Dit is de versie die AboutWindow.xaml.cs ophaalt via Assembly.GetName().Version -->
   </PropertyGroup>
 
